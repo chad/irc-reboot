@@ -73,6 +73,10 @@ struct Cli {
     /// Use vi keybindings for input editing (default: emacs).
     #[arg(long)]
     vi: bool,
+
+    /// Force re-authentication (clears cached OAuth session).
+    #[arg(long)]
+    reauth: bool,
 }
 
 #[tokio::main]
@@ -166,8 +170,12 @@ async fn build_signer(cli: &Cli) -> Result<SignerResult> {
                 Some(uploader),
             ));
         } else {
-            // Try cached session first
+            // Try cached session first (unless --reauth)
             let cache_path = oauth::default_session_path(handle);
+            if cli.reauth {
+                eprintln!("Re-authenticating (--reauth)...");
+                let _ = std::fs::remove_file(&cache_path);
+            }
             if cache_path.exists() {
                 eprintln!("Found cached session, validating...");
                 match oauth::OAuthSession::load(&cache_path) {
@@ -728,6 +736,28 @@ async fn process_input(
                     }
                 }
             }
+            "/logout" => {
+                // Clear cached OAuth session
+                if app.authenticated_did.is_some() {
+                    // Find handle from CLI args or use DID
+                    let handle_hint = arg.trim();
+                    if handle_hint.is_empty() {
+                        app.status_msg("Usage: /logout <handle>");
+                        app.status_msg("  Clears cached OAuth session for the given handle.");
+                    } else {
+                        let cache_path = irc_at_sdk::oauth::default_session_path(handle_hint);
+                        if cache_path.exists() {
+                            let _ = std::fs::remove_file(&cache_path);
+                            app.status_msg(&format!("Cleared cached session for {handle_hint}."));
+                            app.status_msg("Reconnect to re-authenticate.");
+                        } else {
+                            app.status_msg(&format!("No cached session for {handle_hint}."));
+                        }
+                    }
+                } else {
+                    app.status_msg("Not authenticated.");
+                }
+            }
             "/quit" | "/q" => {
                 handle
                     .quit(Some(if arg.is_empty() { "bye" } else { arg }))
@@ -760,6 +790,7 @@ async fn process_input(
                 app.status_msg("  /media <path> [alt] - Upload and share a file");
                 app.status_msg("  /media --post <path> [alt] - Upload + cross-post to Bluesky");
                 app.status_msg("  /crosspost <path> [alt] - Same as /media --post");
+                app.status_msg("  /logout <handle>  - Clear cached OAuth session");
                 app.status_msg("  /quit [message]   - Disconnect");
                 app.status_msg("  /raw <line>       - Send raw IRC");
                 app.status_msg("  Tab               - Nick completion (or switch buffers if empty)");
