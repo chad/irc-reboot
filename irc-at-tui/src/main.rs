@@ -755,7 +755,8 @@ async fn upload_and_send_media(
     let uploader = match &app.media_uploader {
         Some(u) => u.clone(),
         None => {
-            app.status_msg("Media upload requires Bluesky authentication (--handle)");
+            let msg = "Media upload requires Bluesky authentication (--handle)";
+            app.buffer_mut(&app.active_buffer.clone()).push_system(msg);
             return Ok(());
         }
     };
@@ -770,7 +771,8 @@ async fn upload_and_send_media(
     };
 
     if !path.exists() {
-        app.status_msg(&format!("File not found: {}", path.display()));
+        let msg = format!("File not found: {}", path.display());
+        app.buffer_mut(&app.active_buffer.clone()).push_system(&msg);
         return Ok(());
     }
 
@@ -796,23 +798,16 @@ async fn upload_and_send_media(
         _ => "application/octet-stream",
     };
 
-    app.status_msg(&format!("Uploading {filename} ({})...", format_file_size(data.len() as u64)));
-
-    // Generate DPoP proof if needed
-    let dpop_proof = if let Some(ref dpop_key) = uploader.dpop_key {
-        let url = format!(
-            "{}/xrpc/com.atproto.repo.uploadBlob",
-            uploader.pds_url.trim_end_matches('/')
-        );
-        Some(dpop_key.proof("POST", &url, uploader.dpop_nonce.as_deref(), Some(&uploader.access_token))?)
-    } else {
-        None
-    };
+    let buf_name = app.active_buffer.clone();
+    app.buffer_mut(&buf_name).push_system(
+        &format!("Uploading {filename} ({})...", format_file_size(data.len() as u64))
+    );
 
     match irc_at_sdk::media::upload_blob_to_pds(
         &uploader.pds_url,
         &uploader.access_token,
-        dpop_proof.as_deref(),
+        uploader.dpop_key.as_ref(),
+        uploader.dpop_nonce.as_deref(),
         content_type,
         &data,
     ).await {
@@ -841,10 +836,12 @@ async fn upload_and_send_media(
                 is_system: false,
             });
 
-            app.status_msg(&format!("Uploaded {filename} (CID: {})", result.cid));
+            app.buffer_mut(&buf_name).push_system(
+                &format!("Uploaded {filename} (CID: {})", result.cid)
+            );
         }
         Err(e) => {
-            app.status_msg(&format!("Upload failed: {e}"));
+            app.buffer_mut(&buf_name).push_system(&format!("Upload failed: {e}"));
         }
     }
 
