@@ -89,6 +89,32 @@ impl ClientHandle {
         self.cmd_tx.send(Command::Raw(line.to_string())).await?;
         Ok(())
     }
+
+    /// Send a message with IRCv3 tags (for rich media).
+    pub async fn send_tagged(
+        &self,
+        target: &str,
+        text: &str,
+        tags: std::collections::HashMap<String, String>,
+    ) -> Result<()> {
+        let msg = crate::irc::Message {
+            tags,
+            prefix: None,
+            command: "PRIVMSG".to_string(),
+            params: vec![target.to_string(), text.to_string()],
+        };
+        self.cmd_tx.send(Command::Raw(msg.to_string())).await?;
+        Ok(())
+    }
+
+    /// Send a media attachment to a target (channel or user).
+    pub async fn send_media(
+        &self,
+        target: &str,
+        media: &crate::media::MediaAttachment,
+    ) -> Result<()> {
+        self.send_tagged(target, &media.fallback_text(), media.to_tags()).await
+    }
 }
 
 /// Connect to an IRC server and run the client.
@@ -219,11 +245,8 @@ where
     R: tokio::io::AsyncBufRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
 {
-    let do_sasl = signer.is_some();
-
-    if do_sasl {
-        writer.write_all(b"CAP LS 302\r\n").await?;
-    }
+    // Always negotiate capabilities (message-tags, and optionally sasl)
+    writer.write_all(b"CAP LS 302\r\n").await?;
 
     writer
         .write_all(format!("NICK {}\r\n", config.nick).as_bytes())
@@ -455,7 +478,8 @@ where
                                     .to_string();
                                 let target = msg.params[0].clone();
                                 let text = msg.params[1].clone();
-                                let _ = event_tx.send(Event::Message { from, target, text }).await;
+                                let tags = msg.tags.clone();
+                                let _ = event_tx.send(Event::Message { from, target, text, tags }).await;
                             }
                         }
                         _ => {}
@@ -509,10 +533,18 @@ async fn handle_cap_response<W: AsyncWrite + Unpin>(
     match subcmd.as_deref() {
         Some("LS") => {
             let caps_str = msg.params.last().map(|s| s.as_str()).unwrap_or("");
+            let mut req_caps = Vec::new();
+            if caps_str.contains("message-tags") {
+                req_caps.push("message-tags");
+            }
             if caps_str.contains("sasl") && signer.is_some() {
-                writer.write_all(b"CAP REQ :sasl\r\n").await?;
-            } else {
+                req_caps.push("sasl");
+            }
+            if req_caps.is_empty() {
                 writer.write_all(b"CAP END\r\n").await?;
+            } else {
+                let req = format!("CAP REQ :{}\r\n", req_caps.join(" "));
+                writer.write_all(req.as_bytes()).await?;
             }
         }
         Some("ACK") => {
@@ -522,6 +554,9 @@ async fn handle_cap_response<W: AsyncWrite + Unpin>(
                 writer
                     .write_all(b"AUTHENTICATE ATPROTO-CHALLENGE\r\n")
                     .await?;
+            } else {
+                // Got message-tags but no sasl (or no signer) — done with CAP
+                writer.write_all(b"CAP END\r\n").await?;
             }
         }
         Some("NAK") => {

@@ -48,6 +48,8 @@ pub struct HistoryMessage {
     pub from: String,
     pub text: String,
     pub timestamp: u64,
+    /// IRCv3 tags from the original message (for rich media replay).
+    pub tags: HashMap<String, String>,
 }
 
 /// Maximum number of history messages to keep per channel.
@@ -156,6 +158,8 @@ pub struct SharedState {
     pub session_handles: Mutex<HashMap<String, String>>,
     /// channel name -> channel state
     pub channels: Mutex<HashMap<String, ChannelState>>,
+    /// Sessions that have negotiated message-tags capability.
+    pub cap_message_tags: Mutex<HashSet<String>>,
 }
 
 pub struct Server {
@@ -191,6 +195,7 @@ impl Server {
             did_nicks: Mutex::new(HashMap::new()),
             nick_owners: Mutex::new(HashMap::new()),
             session_handles: Mutex::new(HashMap::new()),
+            cap_message_tags: Mutex::new(HashSet::new()),
         });
 
         // Start plain listener
@@ -260,6 +265,7 @@ impl Server {
             did_nicks: Mutex::new(HashMap::new()),
             nick_owners: Mutex::new(HashMap::new()),
             session_handles: Mutex::new(HashMap::new()),
+            cap_message_tags: Mutex::new(HashSet::new()),
         });
 
         let handle = tokio::spawn(async move {
@@ -302,6 +308,7 @@ impl Server {
             did_nicks: Mutex::new(HashMap::new()),
             nick_owners: Mutex::new(HashMap::new()),
             session_handles: Mutex::new(HashMap::new()),
+            cap_message_tags: Mutex::new(HashSet::new()),
         });
 
         let handle = tokio::spawn(async move {

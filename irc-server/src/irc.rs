@@ -1,13 +1,16 @@
 //! IRC message parsing and formatting.
 //!
 //! Implements a minimal subset of RFC 1459 / RFC 2812 message format,
-//! plus CAP capability negotiation numerics and SASL support.
+//! plus IRCv3 message tags, CAP capability negotiation, and SASL support.
 
+use std::collections::HashMap;
 use std::fmt;
 
-/// A parsed IRC message.
+/// A parsed IRC message with optional IRCv3 tags.
 #[derive(Debug, Clone)]
 pub struct Message {
+    /// IRCv3 message tags (key=value pairs).
+    pub tags: HashMap<String, String>,
     /// Optional message prefix (server or user origin).
     pub prefix: Option<String>,
     /// The IRC command (e.g. "NICK", "PRIVMSG", "001").
@@ -17,7 +20,7 @@ pub struct Message {
 }
 
 impl Message {
-    /// Parse a raw IRC line into a Message.
+    /// Parse a raw IRC line into a Message, including optional tags.
     pub fn parse(line: &str) -> Option<Self> {
         let line = line.trim_end_matches(['\r', '\n']);
         if line.is_empty() {
@@ -25,6 +28,17 @@ impl Message {
         }
 
         let mut rest = line;
+
+        // Parse tags: @key=value;key2=value2
+        let tags = if rest.starts_with('@') {
+            let end = rest.find(' ')?;
+            let tag_str = &rest[1..end];
+            rest = &rest[end + 1..];
+            parse_tags(tag_str)
+        } else {
+            HashMap::new()
+        };
+
         let prefix = if rest.starts_with(':') {
             let end = rest.find(' ')?;
             let pfx = rest[1..end].to_string();
@@ -59,6 +73,7 @@ impl Message {
         }
 
         Some(Message {
+            tags,
             prefix,
             command,
             params,
@@ -68,6 +83,7 @@ impl Message {
     /// Create a new message with no prefix.
     pub fn new(command: &str, params: Vec<&str>) -> Self {
         Message {
+            tags: HashMap::new(),
             prefix: None,
             command: command.to_string(),
             params: params.into_iter().map(|s| s.to_string()).collect(),
@@ -77,6 +93,7 @@ impl Message {
     /// Create a new message with a server prefix.
     pub fn from_server(server: &str, command: &str, params: Vec<&str>) -> Self {
         Message {
+            tags: HashMap::new(),
             prefix: Some(server.to_string()),
             command: command.to_string(),
             params: params.into_iter().map(|s| s.to_string()).collect(),
@@ -86,6 +103,22 @@ impl Message {
 
 impl fmt::Display for Message {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Write tags
+        if !self.tags.is_empty() {
+            write!(f, "@")?;
+            let mut first = true;
+            for (key, value) in &self.tags {
+                if !first { write!(f, ";")?; }
+                first = false;
+                if value.is_empty() {
+                    write!(f, "{key}")?;
+                } else {
+                    write!(f, "{key}={}", escape_tag_value(value))?;
+                }
+            }
+            write!(f, " ")?;
+        }
+
         if let Some(ref prefix) = self.prefix {
             write!(f, ":{prefix} ")?;
         }
@@ -99,6 +132,58 @@ impl fmt::Display for Message {
         }
         Ok(())
     }
+}
+
+/// Parse IRCv3 tag string: `key=value;key2=value2`
+fn parse_tags(tag_str: &str) -> HashMap<String, String> {
+    let mut tags = HashMap::new();
+    for pair in tag_str.split(';') {
+        if pair.is_empty() { continue; }
+        if let Some((key, value)) = pair.split_once('=') {
+            tags.insert(key.to_string(), unescape_tag_value(value));
+        } else {
+            tags.insert(pair.to_string(), String::new());
+        }
+    }
+    tags
+}
+
+/// Unescape IRCv3 tag values.
+fn unescape_tag_value(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some(':') => result.push(';'),
+                Some('s') => result.push(' '),
+                Some('\\') => result.push('\\'),
+                Some('r') => result.push('\r'),
+                Some('n') => result.push('\n'),
+                Some(other) => { result.push('\\'); result.push(other); }
+                None => result.push('\\'),
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
+/// Escape a value for IRCv3 tag encoding.
+fn escape_tag_value(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            ';' => result.push_str("\\:"),
+            ' ' => result.push_str("\\s"),
+            '\\' => result.push_str("\\\\"),
+            '\r' => result.push_str("\\r"),
+            '\n' => result.push_str("\\n"),
+            _ => result.push(c),
+        }
+    }
+    result
 }
 
 // Standard IRC numerics
@@ -130,6 +215,7 @@ pub const RPL_ENDOFINVITELIST: &str = "347";
 
 pub const ERR_BANNEDFROMCHAN: &str = "474";
 pub const ERR_INVITEONLYCHAN: &str = "473";
+pub const ERR_BADCHANNELKEY: &str = "475";
 
 // Error numerics for channels
 pub const ERR_NOTONCHANNEL: &str = "442";
@@ -150,7 +236,6 @@ pub const ERR_NONICKNAMEGIVEN: &str = "431";
 pub const ERR_NICKNAMEINUSE: &str = "433";
 pub const ERR_NOSUCHNICK: &str = "401";
 pub const ERR_NOTREGISTERED: &str = "451";
-pub const ERR_BADCHANNELKEY: &str = "475";
 
 #[cfg(test)]
 mod tests {
@@ -161,6 +246,7 @@ mod tests {
         let msg = Message::parse("NICK alice").unwrap();
         assert_eq!(msg.command, "NICK");
         assert_eq!(msg.params, vec!["alice"]);
+        assert!(msg.tags.is_empty());
     }
 
     #[test]
@@ -179,9 +265,25 @@ mod tests {
     }
 
     #[test]
+    fn parse_with_tags() {
+        let msg = Message::parse("@content-type=image/jpeg;media-url=https://example.com/img.jpg :alice!a@host PRIVMSG #chan :photo").unwrap();
+        assert_eq!(msg.tags.get("content-type").unwrap(), "image/jpeg");
+        assert_eq!(msg.tags.get("media-url").unwrap(), "https://example.com/img.jpg");
+        assert_eq!(msg.command, "PRIVMSG");
+    }
+
+    #[test]
     fn roundtrip() {
         let msg = Message::from_server("irc.example", "001", vec!["alice", "Welcome to IRC"]);
         let s = msg.to_string();
         assert_eq!(s, ":irc.example 001 alice :Welcome to IRC");
+    }
+
+    #[test]
+    fn tag_escaping() {
+        let original = "hello world;test";
+        let escaped = escape_tag_value(original);
+        assert_eq!(escaped, "hello\\sworld\\:test");
+        assert_eq!(unescape_tag_value(&escaped), original);
     }
 }

@@ -19,5 +19,6 @@ pub mod crypto;
 pub mod did;
 pub mod event;
 pub mod irc;
+pub mod media;
 pub mod oauth;
 pub mod pds;

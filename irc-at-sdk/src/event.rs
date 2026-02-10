@@ -24,6 +24,8 @@ pub enum Event {
         from: String,
         target: String,
         text: String,
+        /// IRCv3 message tags (empty if none).
+        tags: std::collections::HashMap<String, String>,
     },
 
     /// NAMES list for a channel.

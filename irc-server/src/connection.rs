@@ -31,6 +31,7 @@ pub struct Connection {
     // CAP negotiation state
     cap_negotiating: bool,
     cap_sasl_requested: bool,
+    cap_message_tags: bool,
 
     // SASL state
     sasl_in_progress: bool,
@@ -47,6 +48,7 @@ impl Connection {
             registered: false,
             cap_negotiating: false,
             cap_sasl_requested: false,
+            cap_message_tags: false,
             sasl_in_progress: false,
         }
     }
@@ -422,7 +424,7 @@ where
                     continue;
                 }
                 if let (Some(target), Some(text)) = (msg.params.first(), msg.params.get(1)) {
-                    handle_privmsg(&conn, &msg.command, target, text, &state);
+                    handle_privmsg(&conn, &msg.command, target, text, &msg.tags, &state);
                 }
             }
             "QUIT" => {
@@ -466,6 +468,7 @@ where
     state.connections.lock().unwrap().remove(&session_id);
     state.session_dids.lock().unwrap().remove(&session_id);
     state.session_handles.lock().unwrap().remove(&session_id);
+    state.cap_message_tags.lock().unwrap().remove(&session_id);
     {
         let mut channels = state.channels.lock().unwrap();
         for ch in channels.values_mut() {
@@ -495,21 +498,37 @@ fn handle_cap(
             let reply = Message::from_server(
                 server_name,
                 "CAP",
-                vec![conn.nick_or_star(), "LS", "sasl"],
+                vec![conn.nick_or_star(), "LS", "sasl message-tags"],
             );
             send(state, session_id, format!("{reply}\r\n"));
         }
         Some("REQ") => {
             if let Some(caps) = msg.params.get(1) {
-                if caps
-                    .split_whitespace()
-                    .any(|c| c.eq_ignore_ascii_case("sasl"))
-                {
-                    conn.cap_sasl_requested = true;
+                let requested: Vec<&str> = caps.split_whitespace().collect();
+                let mut acked = Vec::new();
+                let mut all_ok = true;
+
+                for cap in &requested {
+                    match cap.to_ascii_lowercase().as_str() {
+                        "sasl" => {
+                            conn.cap_sasl_requested = true;
+                            acked.push("sasl");
+                        }
+                        "message-tags" => {
+                            conn.cap_message_tags = true;
+                            state.cap_message_tags.lock().unwrap().insert(session_id.to_string());
+                            acked.push("message-tags");
+                        }
+                        _ => { all_ok = false; }
+                    }
+                }
+
+                if all_ok && !acked.is_empty() {
+                    let ack_str = acked.join(" ");
                     let reply = Message::from_server(
                         server_name,
                         "CAP",
-                        vec![conn.nick_or_star(), "ACK", "sasl"],
+                        vec![conn.nick_or_star(), "ACK", &ack_str],
                     );
                     send(state, session_id, format!("{reply}\r\n"));
                 } else {
@@ -853,13 +872,24 @@ fn handle_join(
             }
     }
 
-    // Replay recent message history
+    // Replay recent message history (with tags for capable clients)
     {
+        let has_tags_cap = state.cap_message_tags.lock().unwrap().contains(session_id);
         let channels = state.channels.lock().unwrap();
         if let Some(ch) = channels.get(channel) {
-            for msg in &ch.history {
-                let line = format!(":{} PRIVMSG {} :{}\r\n", msg.from, channel, msg.text);
-                send(state, session_id, line);
+            for hist in &ch.history {
+                if has_tags_cap && !hist.tags.is_empty() {
+                    let tag_msg = irc::Message {
+                        tags: hist.tags.clone(),
+                        prefix: Some(hist.from.clone()),
+                        command: "PRIVMSG".to_string(),
+                        params: vec![channel.to_string(), hist.text.clone()],
+                    };
+                    send(state, session_id, format!("{tag_msg}\r\n"));
+                } else {
+                    let line = format!(":{} PRIVMSG {} :{}\r\n", hist.from, channel, hist.text);
+                    send(state, session_id, line);
+                }
             }
         }
     }
@@ -1628,10 +1658,24 @@ fn handle_privmsg(
     command: &str,
     target: &str,
     text: &str,
+    tags: &std::collections::HashMap<String, String>,
     state: &Arc<SharedState>,
 ) {
     let hostmask = conn.hostmask();
-    let line = format!(":{hostmask} {command} {target} :{text}\r\n");
+    // Plain line (no tags) for clients that don't support message-tags
+    let plain_line = format!(":{hostmask} {command} {target} :{text}\r\n");
+    // Tagged line for clients that negotiated message-tags
+    let tagged_line = if tags.is_empty() {
+        None
+    } else {
+        let tag_msg = irc::Message {
+            tags: tags.clone(),
+            prefix: Some(hostmask.clone()),
+            command: command.to_string(),
+            params: vec![target.to_string(), text.to_string()],
+        };
+        Some(format!("{tag_msg}\r\n"))
+    };
 
     if target.starts_with('#') || target.starts_with('&') {
         // Store in channel history
@@ -1646,6 +1690,7 @@ fn handle_privmsg(
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs(),
+                    tags: tags.clone(),
                 });
                 while ch.history.len() > MAX_HISTORY {
                     ch.history.pop_front();
@@ -1662,18 +1707,30 @@ fn handle_privmsg(
             .map(|ch| ch.members.iter().cloned().collect())
             .unwrap_or_default();
 
+        let tag_caps = state.cap_message_tags.lock().unwrap();
         let conns = state.connections.lock().unwrap();
         for member_session in &members {
             if member_session != &conn.id
-                && let Some(tx) = conns.get(member_session) {
-                    let _ = tx.try_send(line.clone());
-                }
+                && let Some(tx) = conns.get(member_session)
+            {
+                let line = match (&tagged_line, tag_caps.contains(member_session)) {
+                    (Some(tagged), true) => tagged,
+                    _ => &plain_line,
+                };
+                let _ = tx.try_send(line.clone());
+            }
         }
     } else {
         let target_session = state.nick_to_session.lock().unwrap().get(target).cloned();
-        if let Some(session) = target_session
-            && let Some(tx) = state.connections.lock().unwrap().get(&session) {
-                let _ = tx.try_send(line);
+        if let Some(ref session) = target_session {
+            let has_tags = state.cap_message_tags.lock().unwrap().contains(session);
+            let line = match (&tagged_line, has_tags) {
+                (Some(tagged), true) => tagged,
+                _ => &plain_line,
+            };
+            if let Some(tx) = state.connections.lock().unwrap().get(session) {
+                let _ = tx.try_send(line.clone());
             }
+        }
     }
 }

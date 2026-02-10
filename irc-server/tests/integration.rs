@@ -364,7 +364,7 @@ async fn channel_messaging() {
     )
     .await;
 
-    if let Event::Message { from, target, text } = msg {
+    if let Event::Message { from, target, text, .. } = msg {
         assert_eq!(from, "alice");
         assert_eq!(target, "#test");
         assert_eq!(text, "hello bob!");
@@ -1035,13 +1035,17 @@ async fn nick_ownership() {
     };
     let (_handle2, mut events2) = client::connect(config2, None);
 
-    // Should get 433 with "registered to another identity"
-    let err = expect_event(
+    // Guest enters CAP negotiation (message-tags), so nick is provisionally allowed.
+    // At registration, the nick ownership check renames them to GuestXXXX.
+    // They should get a Registered event with a Guest nick, not "alice".
+    let reg = expect_event(
         &mut events2, 2000,
-        |e| matches!(e, Event::RawLine(line) if line.contains("433") && line.contains("registered")),
-        "Nick rejected for imposter",
+        |e| matches!(e, Event::Registered { nick } if nick != "alice"),
+        "Imposter registered with different nick",
     ).await;
-    assert!(matches!(err, Event::RawLine(_)));
+    if let Event::Registered { nick } = reg {
+        assert!(nick.starts_with("Guest"), "Expected GuestXXXX, got {nick}");
+    }
 
     server_handle.abort();
 }
@@ -1469,6 +1473,78 @@ async fn tls_connection() {
     expect_event(&mut events2, 3000, |e| matches!(e, Event::Registered { .. }), "Registered via plain").await;
 
     handle.quit(None).await.unwrap();
+    handle2.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+// ── Test: Rich media tags passthrough ───────────────────────────────
+
+#[tokio::test]
+async fn media_tags_passthrough() {
+    let (addr, server_handle) = start_test_server(empty_resolver()).await;
+
+    // Alice connects
+    let config1 = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "alice".to_string(),
+        user: "alice".to_string(),
+        realname: "Alice".to_string(),
+        ..Default::default()
+    };
+    let (handle1, mut events1) = client::connect(config1, None);
+    expect_event(&mut events1, 2000, |e| matches!(e, Event::Registered { .. }), "Alice registered").await;
+    handle1.join("#media").await.unwrap();
+    expect_event(&mut events1, 2000, |e| matches!(e, Event::Joined { .. }), "Alice joined").await;
+
+    // Bob connects
+    let config2 = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "bob".to_string(),
+        user: "bob".to_string(),
+        realname: "Bob".to_string(),
+        ..Default::default()
+    };
+    let (handle2, mut events2) = client::connect(config2, None);
+    expect_event(&mut events2, 2000, |e| matches!(e, Event::Registered { .. }), "Bob registered").await;
+    handle2.join("#media").await.unwrap();
+    expect_event(&mut events2, 2000, |e| matches!(e, Event::Joined { .. }), "Bob joined").await;
+
+    // Drain bob's join from alice's stream
+    expect_event(&mut events1, 2000, |e| matches!(e, Event::Joined { nick, .. } if nick == "bob"), "Alice sees bob").await;
+
+    // Alice sends a media message with tags
+    let media = irc_at_sdk::media::MediaAttachment {
+        content_type: "image/jpeg".to_string(),
+        url: "https://cdn.example.com/photo.jpg".to_string(),
+        alt: Some("A sunset".to_string()),
+        width: Some(1200),
+        height: Some(800),
+        blurhash: None,
+        size: Some(45000),
+        filename: None,
+    };
+    handle1.send_media("#media", &media).await.unwrap();
+
+    // Bob should receive the message with tags
+    let msg = expect_event(
+        &mut events2, 2000,
+        |e| matches!(e, Event::Message { from, target, .. } if from == "alice" && target == "#media"),
+        "Bob receives media message",
+    ).await;
+
+    if let Event::Message { tags, text, .. } = msg {
+        // Tags should be present (both clients negotiated message-tags)
+        assert_eq!(tags.get("content-type").map(|s| s.as_str()), Some("image/jpeg"));
+        assert_eq!(tags.get("media-url").map(|s| s.as_str()), Some("https://cdn.example.com/photo.jpg"));
+        assert_eq!(tags.get("media-alt").map(|s| s.as_str()), Some("A sunset"));
+        assert_eq!(tags.get("media-w").map(|s| s.as_str()), Some("1200"));
+        // Fallback text should contain the URL
+        assert!(text.contains("https://cdn.example.com/photo.jpg"));
+    } else {
+        panic!("Expected Message event");
+    }
+
+    handle1.quit(None).await.unwrap();
     handle2.quit(None).await.unwrap();
     server_handle.abort();
 }

@@ -328,7 +328,10 @@ fn process_irc_event(app: &mut App, event: Event) {
             });
             buf.push_system(&format!("{nick} has left"));
         }
-        Event::Message { from, target, text } => {
+        Event::Message { from, target, text, tags } => {
+            // Check for media attachment in tags
+            let media = irc_at_sdk::media::MediaAttachment::from_tags(&tags);
+
             // Detect CTCP ACTION (/me)
             if text.starts_with('\x01') && text.ends_with('\x01') {
                 let inner = &text[1..text.len()-1];
@@ -345,6 +348,20 @@ fn process_irc_event(app: &mut App, event: Event) {
                         is_system: true,
                     });
                 }
+            } else if let Some(ref media) = media {
+                // Rich media message
+                let buf_name = if !target.starts_with('#') && !target.starts_with('&') {
+                    if from == app.nick { target.clone() } else { from.clone() }
+                } else {
+                    target.clone()
+                };
+                let display = format_media_display(media);
+                app.buffer_mut(&buf_name).push(crate::app::BufferLine {
+                    timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                    from: from.clone(),
+                    text: display,
+                    is_system: false,
+                });
             } else {
                 app.chat_msg(&target, &from, &text);
             }
@@ -678,6 +695,46 @@ async fn process_input(
     }
 
     Ok(())
+}
+
+/// Format a media attachment for display in the TUI.
+fn format_media_display(media: &irc_at_sdk::media::MediaAttachment) -> String {
+    let type_icon = if media.is_image() {
+        "🖼"
+    } else if media.is_video() {
+        "🎬"
+    } else if media.is_audio() {
+        "🎵"
+    } else {
+        "📎"
+    };
+
+    let mut parts = vec![format!("{type_icon} [{ct}]", ct = media.content_type)];
+
+    if let Some(ref alt) = media.alt {
+        parts.push(alt.clone());
+    }
+
+    if let (Some(w), Some(h)) = (media.width, media.height) {
+        parts.push(format!("{w}×{h}"));
+    }
+
+    if let Some(size) = media.size {
+        parts.push(format_file_size(size));
+    }
+
+    parts.push(media.url.clone());
+    parts.join(" ")
+}
+
+fn format_file_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes}B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1}KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1}MB", bytes as f64 / (1024.0 * 1024.0))
+    }
 }
 
 fn try_nick_complete(app: &mut App) {

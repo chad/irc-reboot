@@ -152,6 +152,44 @@ The server stores the last 100 messages per channel. When you join, recent
 history is replayed as standard PRIVMSG — works with any IRC client, no
 special protocol extension needed.
 
+### Rich Media (IRCv3 Message Tags)
+
+Rich media is supported through IRCv3 message tags, giving **multipart/alternative
+semantics** — the same content in two representations:
+
+- **Tags**: Structured metadata (content-type, URL, dimensions, alt text)
+- **Body**: Plain text fallback (description + URL)
+
+```
+@content-type=image/jpeg;media-url=https://cdn.bsky.app/img/...;media-alt=Sunset;media-w=1200;media-h=800 :alice!a@host PRIVMSG #photos :Sunset https://cdn.bsky.app/img/...
+```
+
+| Client | What they see |
+|--------|--------------|
+| irssi, WeeChat | `Sunset https://cdn.bsky.app/img/...` (clickable link) |
+| irc-at-tui | `🖼 [image/jpeg] Sunset 1200×800 https://cdn.bsky.app/img/...` |
+
+Media is hosted externally (AT Protocol PDS blob storage). The IRC server
+never handles media bytes — it just relays tagged messages. Tags are only
+sent to clients that negotiated the `message-tags` capability; other clients
+get the plain text fallback.
+
+**Supported tag keys:**
+
+| Tag | Description |
+|-----|-------------|
+| `content-type` | MIME type (e.g. `image/jpeg`, `video/mp4`) |
+| `media-url` | URL where the media can be fetched |
+| `media-alt` | Alt text / description |
+| `media-w` | Width in pixels |
+| `media-h` | Height in pixels |
+| `media-blurhash` | Blurhash placeholder |
+| `media-size` | File size in bytes |
+| `media-filename` | Original filename |
+
+The SDK provides `ClientHandle::send_media()` for easy media sending and
+`MediaAttachment::from_tags()` for parsing received media.
+
 ### Rate Limiting
 
 Token bucket rate limiter (10 commands/second) kicks in after registration.
@@ -245,18 +283,20 @@ Options:
 cargo test
 ```
 
-**47 tests** covering:
+**61 tests** covering:
 
-- SDK: IRC parsing, DID document parsing, key generation/signing/verification,
-  multibase/multicodec, challenge response encoding, SASL signer variants
-- Server: message parsing, SASL challenge store (create, take, replay, expiry,
-  forged nonce), channel state
+- SDK: IRC parsing (with tag support), tag escaping roundtrip, DID document
+  parsing, key generation/signing/verification, multibase/multicodec, challenge
+  response encoding, SASL signer variants, media attachment roundtrip, link
+  preview roundtrip, media type detection
+- Server: message parsing (with tags), tag escaping, SASL challenge store
+  (create, take, replay, expiry, forged nonce), channel state
 - Integration: guest connection, secp256k1 auth, ed25519 auth, wrong key
   rejection, unknown DID rejection, expired challenge rejection, replayed nonce
   rejection, channel messaging, mixed auth/guest, nick collision, channel topic,
   topic lock, channel ops/kick, hostmask bans, DID bans, invite-only, message
   history replay, nick ownership, quit broadcast, channel key (+k), TLS
-  connection
+  connection, rich media tag passthrough
 
 ## Protocol Notes
 
@@ -272,6 +312,8 @@ cargo test
 
 - CAP negotiation follows IRCv3 `CAP LS 302` / `CAP REQ` / `CAP END`
 - SASL flow follows IRCv3 SASL specification with a custom mechanism name
+- `message-tags` capability follows the IRCv3 message tags specification
+- Media tags use vendor-prefixed names (`content-type`, `media-url`, etc.)
 - `ATPROTO-CHALLENGE` could be proposed as an IRCv3 WG mechanism
 
 ## Known Limitations
