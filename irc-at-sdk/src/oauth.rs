@@ -396,7 +396,7 @@ async fn push_authorization_request(
         ("redirect_uri", redirect_uri),
         ("code_challenge", code_challenge),
         ("code_challenge_method", "S256"),
-        ("scope", "atproto"),
+        ("scope", "atproto transition:generic"),
         ("state", state),
         ("login_hint", login_hint),
     ];
