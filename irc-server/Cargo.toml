@@ -1,0 +1,36 @@
+[package]
+name = "irc-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "IRC server with AT Protocol SASL authentication"
+
+[lib]
+name = "irc_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "irc-server"
+path = "src/main.rs"
+
+[dependencies]
+irc-at-sdk = { path = "../irc-at-sdk" }
+tokio = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+base64 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rand = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+reqwest = { workspace = true }
+
+[dev-dependencies]
+irc-at-sdk = { path = "../irc-at-sdk" }
+rcgen = "0.13"
+tempfile = "3"

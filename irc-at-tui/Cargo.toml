@@ -1,0 +1,22 @@
+[package]
+name = "irc-at-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Minimal TUI client for IRC with AT Protocol authentication"
+
+[[bin]]
+name = "irc-at-tui"
+path = "src/main.rs"
+
+[dependencies]
+irc-at-sdk = { path = "../irc-at-sdk" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+ratatui = "0.29"
+crossterm = "0.28"
+hex = "0.4"
