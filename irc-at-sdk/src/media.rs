@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use reqwest::header;
 
 /// Metadata for a media attachment.
@@ -144,106 +144,150 @@ impl LinkPreview {
     }
 }
 
-/// Upload a blob to an AT Protocol PDS and return the CDN URL.
+/// Upload a media file to an AT Protocol PDS, pin it with a record, and return
+/// a publicly accessible URL.
 ///
-/// Requires an authenticated session (access token + optional DPoP).
-/// Handles DPoP nonce discovery automatically (retries on `use_dpop_nonce` error).
-pub async fn upload_blob_to_pds(
+/// Flow:
+/// 1. Upload blob via `com.atproto.repo.uploadBlob`
+/// 2. Create a record referencing the blob (prevents garbage collection)
+/// 3. Return CDN URL that serves the blob publicly
+#[allow(clippy::too_many_arguments)]
+pub async fn upload_media_to_pds(
     pds_url: &str,
+    did: &str,
     access_token: &str,
     dpop_key: Option<&crate::oauth::DpopKey>,
     dpop_nonce: Option<&str>,
     content_type: &str,
     data: &[u8],
-) -> Result<BlobUploadResult> {
+    alt_text: Option<&str>,
+) -> Result<MediaUploadResult> {
     let client = reqwest::Client::new();
-    let url = format!("{}/xrpc/com.atproto.repo.uploadBlob", pds_url.trim_end_matches('/'));
-
+    let base = pds_url.trim_end_matches('/');
     let mut current_nonce = dpop_nonce.map(|s| s.to_string());
 
-    // Retry loop for DPoP nonce discovery (PDS may require a fresh nonce)
+    // Step 1: Upload the blob
+    let blob_json = dpop_post(
+        &client, base, "com.atproto.repo.uploadBlob",
+        dpop_key, access_token, &mut current_nonce,
+        Some(content_type), data.to_vec(),
+    ).await.context("Blob upload failed")?;
+
+    let blob = &blob_json["blob"];
+    let cid = blob["ref"]["$link"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("No CID in upload response"))?
+        .to_string();
+    let size = blob["size"].as_u64().unwrap_or(data.len() as u64);
+    let mime = blob["mimeType"].as_str().unwrap_or(content_type).to_string();
+
+    // Step 2: Create a record that references the blob to prevent GC.
+    // We create a minimal Bluesky post with the image embedded.
+    let post_text = alt_text.unwrap_or("📎").to_string();
+    let record_body = serde_json::json!({
+        "repo": did,
+        "collection": "app.bsky.feed.post",
+        "record": {
+            "$type": "app.bsky.feed.post",
+            "text": post_text,
+            "createdAt": chrono::Utc::now().to_rfc3339(),
+            "embed": {
+                "$type": "app.bsky.embed.images",
+                "images": [{
+                    "alt": alt_text.unwrap_or(""),
+                    "image": blob.clone(),
+                }]
+            }
+        }
+    });
+
+    let _record_result = dpop_post(
+        &client, base, "com.atproto.repo.createRecord",
+        dpop_key, access_token, &mut current_nonce,
+        None, serde_json::to_vec(&record_body)?,
+    ).await.context("Record creation failed")?;
+
+    // Step 3: Build CDN URL (works now that blob is referenced by a record)
+    let ext = match mime.as_str() {
+        "image/png" => "png",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        _ => "jpeg",
+    };
+    let cdn_url = format!(
+        "https://cdn.bsky.app/img/feed_fullsize/plain/{did}/{cid}@{ext}",
+    );
+
+    Ok(MediaUploadResult {
+        cid,
+        size,
+        mime_type: mime,
+        url: cdn_url,
+    })
+}
+
+/// POST to an XRPC endpoint with DPoP nonce retry logic.
+#[allow(clippy::too_many_arguments)]
+async fn dpop_post(
+    client: &reqwest::Client,
+    base: &str,
+    method: &str,
+    dpop_key: Option<&crate::oauth::DpopKey>,
+    access_token: &str,
+    current_nonce: &mut Option<String>,
+    content_type_override: Option<&str>,
+    body: Vec<u8>,
+) -> Result<serde_json::Value> {
+    let url = format!("{base}/xrpc/{method}");
+    let ct = content_type_override.unwrap_or("application/json");
+
     for attempt in 0..3 {
         let mut req = client.post(&url)
-            .header(header::CONTENT_TYPE, content_type)
-            .body(data.to_vec());
+            .header(header::CONTENT_TYPE, ct)
+            .body(body.clone());
 
         if let Some(key) = dpop_key {
             let proof = key.proof("POST", &url, current_nonce.as_deref(), Some(access_token))?;
-            req = req
-                .header("Authorization", format!("DPoP {access_token}"))
-                .header("DPoP", proof);
+            req = req.header("Authorization", format!("DPoP {access_token}"))
+                     .header("DPoP", proof);
         } else {
             req = req.header("Authorization", format!("Bearer {access_token}"));
         }
 
         let resp = req.send().await?;
 
-        // Check for DPoP nonce error — PDS sends 401 with a new nonce
-        if (resp.status() == 401 || resp.status() == 400)
-            && let Some(new_nonce) = resp.headers().get("dpop-nonce")
-            && attempt < 2
-        {
-            current_nonce = Some(new_nonce.to_str().unwrap_or("").to_string());
-            continue; // Retry with fresh nonce
+        if let Some(new_nonce) = resp.headers().get("dpop-nonce") {
+            *current_nonce = Some(new_nonce.to_str().unwrap_or("").to_string());
+        }
+
+        if (resp.status() == 401 || resp.status() == 400) && attempt < 2 {
+            let _body = resp.text().await.unwrap_or_default();
+            continue;
         }
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Blob upload failed ({status}): {body}");
+            anyhow::bail!("{status}: {body}");
         }
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Blob upload failed ({status}): {body}");
-        }
-
-        let result: serde_json::Value = resp.json().await?;
-        let blob = &result["blob"];
-
-        let cid = blob["ref"]["$link"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("No CID in upload response"))?
-            .to_string();
-
-        let size = blob["size"].as_u64().unwrap_or(data.len() as u64);
-        let mime = blob["mimeType"].as_str().unwrap_or(content_type).to_string();
-
-        return Ok(BlobUploadResult {
-            cid,
-            size,
-            mime_type: mime,
-        });
+        return Ok(resp.json().await?);
     }
 
-    anyhow::bail!("Blob upload failed after retries")
+    anyhow::bail!("Request failed after retries")
 }
 
-/// Result of a blob upload to PDS.
+/// Result of a media upload.
 #[derive(Debug, Clone)]
-pub struct BlobUploadResult {
+pub struct MediaUploadResult {
     /// Content identifier (CID) of the uploaded blob.
     pub cid: String,
     /// Size in bytes.
     pub size: u64,
     /// MIME type.
     pub mime_type: String,
-}
-
-impl BlobUploadResult {
-    /// Construct a direct PDS URL for this blob.
-    ///
-    /// Uses `com.atproto.sync.getBlob` which is publicly accessible
-    /// and works for any uploaded blob (no record reference needed).
-    pub fn blob_url(&self, did: &str, pds_url: &str) -> String {
-        format!(
-            "{}/xrpc/com.atproto.sync.getBlob?did={}&cid={}",
-            pds_url.trim_end_matches('/'),
-            did,
-            self.cid,
-        )
-    }
+    /// Publicly accessible URL for the media.
+    pub url: String,
 }
 
 #[cfg(test)]

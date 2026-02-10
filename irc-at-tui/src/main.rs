@@ -803,21 +803,22 @@ async fn upload_and_send_media(
         &format!("Uploading {filename} ({})...", format_file_size(data.len() as u64))
     );
 
-    match irc_at_sdk::media::upload_blob_to_pds(
+    match irc_at_sdk::media::upload_media_to_pds(
         &uploader.pds_url,
+        &uploader.did,
         &uploader.access_token,
         uploader.dpop_key.as_ref(),
         uploader.dpop_nonce.as_deref(),
         content_type,
         &data,
+        alt,
     ).await {
         Ok(result) => {
-            let cdn_url = result.blob_url(&uploader.did, &uploader.pds_url);
             let media = irc_at_sdk::media::MediaAttachment {
                 content_type: content_type.to_string(),
-                url: cdn_url,
+                url: result.url.clone(),
                 alt: alt.map(|s| s.to_string()),
-                width: None,  // Could detect from image headers
+                width: None,
                 height: None,
                 blurhash: None,
                 size: Some(result.size),
@@ -837,7 +838,7 @@ async fn upload_and_send_media(
             });
 
             app.buffer_mut(&buf_name).push_system(
-                &format!("Uploaded {filename} (CID: {})", result.cid)
+                &format!("Shared {filename} (CID: {})", result.cid)
             );
         }
         Err(e) => {
