@@ -812,7 +812,7 @@ async fn upload_and_send_media(
         &data,
     ).await {
         Ok(result) => {
-            let cdn_url = result.cdn_url(&uploader.did);
+            let cdn_url = result.blob_url(&uploader.did, &uploader.pds_url);
             let media = irc_at_sdk::media::MediaAttachment {
                 content_type: content_type.to_string(),
                 url: cdn_url,

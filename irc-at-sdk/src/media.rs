@@ -232,21 +232,16 @@ pub struct BlobUploadResult {
 }
 
 impl BlobUploadResult {
-    /// Construct the Bluesky CDN URL for this blob.
+    /// Construct a direct PDS URL for this blob.
     ///
-    /// Format: `https://cdn.bsky.app/img/feed_thumbnail/plain/{did}/{cid}@jpeg`
-    /// For full size: `https://cdn.bsky.app/img/feed_fullsize/plain/{did}/{cid}@jpeg`
-    pub fn cdn_url(&self, did: &str) -> String {
-        let ext = match self.mime_type.as_str() {
-            "image/png" => "png",
-            "image/webp" => "webp",
-            _ => "jpeg",
-        };
+    /// Uses `com.atproto.sync.getBlob` which is publicly accessible
+    /// and works for any uploaded blob (no record reference needed).
+    pub fn blob_url(&self, did: &str, pds_url: &str) -> String {
         format!(
-            "https://cdn.bsky.app/img/feed_fullsize/plain/{did}/{cid}@{ext}",
-            did = did,
-            cid = self.cid,
-            ext = ext,
+            "{}/xrpc/com.atproto.sync.getBlob?did={}&cid={}",
+            pds_url.trim_end_matches('/'),
+            did,
+            self.cid,
         )
     }
 }
