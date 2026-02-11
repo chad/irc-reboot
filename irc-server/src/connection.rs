@@ -427,6 +427,15 @@ where
                     handle_privmsg(&conn, &msg.command, target, text, &msg.tags, &state);
                 }
             }
+            "TAGMSG" => {
+                // IRCv3 TAGMSG: relay tags with no body, only to message-tags capable clients
+                if !conn.registered {
+                    continue;
+                }
+                if let Some(target) = msg.params.first() {
+                    handle_tagmsg(&conn, target, &msg.tags, &state);
+                }
+            }
             "QUIT" => {
                 break;
             }
@@ -1651,6 +1660,54 @@ fn handle_whois(
         vec![my_nick, target_nick, "End of /WHOIS list"],
     );
     send(state, session_id, format!("{end}\r\n"));
+}
+
+fn handle_tagmsg(
+    conn: &Connection,
+    target: &str,
+    tags: &std::collections::HashMap<String, String>,
+    state: &Arc<SharedState>,
+) {
+    if tags.is_empty() {
+        return; // TAGMSG with no tags is meaningless
+    }
+
+    let hostmask = conn.hostmask();
+    let tag_msg = irc::Message {
+        tags: tags.clone(),
+        prefix: Some(hostmask.clone()),
+        command: "TAGMSG".to_string(),
+        params: vec![target.to_string()],
+    };
+    let tagged_line = format!("{tag_msg}\r\n");
+
+    // Only send to clients that support message-tags
+    if target.starts_with('#') || target.starts_with('&') {
+        let members: Vec<String> = state
+            .channels.lock().unwrap()
+            .get(target)
+            .map(|ch| ch.members.iter().cloned().collect())
+            .unwrap_or_default();
+
+        let tag_caps = state.cap_message_tags.lock().unwrap();
+        let conns = state.connections.lock().unwrap();
+        for member_session in &members {
+            if member_session != &conn.id
+                && tag_caps.contains(member_session)
+                && let Some(tx) = conns.get(member_session)
+            {
+                let _ = tx.try_send(tagged_line.clone());
+            }
+        }
+    } else {
+        let target_session = state.nick_to_session.lock().unwrap().get(target).cloned();
+        if let Some(ref session) = target_session
+            && state.cap_message_tags.lock().unwrap().contains(session)
+            && let Some(tx) = state.connections.lock().unwrap().get(session)
+        {
+            let _ = tx.try_send(tagged_line.clone());
+        }
+    }
 }
 
 fn handle_privmsg(

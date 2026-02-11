@@ -144,6 +144,131 @@ impl LinkPreview {
     }
 }
 
+/// A reaction to a message.
+#[derive(Debug, Clone)]
+pub struct Reaction {
+    /// The emoji or short text (e.g. "🔥", "❤️", "+1").
+    pub emoji: String,
+    /// Message ID being reacted to (IRCv3 msgid tag value), if available.
+    pub msgid: Option<String>,
+}
+
+impl Reaction {
+    pub fn to_tags(&self) -> HashMap<String, String> {
+        let mut tags = HashMap::new();
+        tags.insert("+react".to_string(), self.emoji.clone());
+        if let Some(ref id) = self.msgid {
+            tags.insert("+reply".to_string(), id.clone());
+        }
+        tags
+    }
+
+    pub fn from_tags(tags: &HashMap<String, String>) -> Option<Self> {
+        let emoji = tags.get("+react")?;
+        Some(Self {
+            emoji: emoji.clone(),
+            msgid: tags.get("+reply").cloned(),
+        })
+    }
+}
+
+/// Fetch OpenGraph metadata from a URL for link preview.
+pub async fn fetch_link_preview(url: &str) -> Result<LinkPreview> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()?;
+
+    let resp = client.get(url)
+        .header("User-Agent", "irc-at-bot/0.1 (link preview)")
+        .header("Accept", "text/html")
+        .send().await?
+        .error_for_status()?;
+
+    let content_type = resp.headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if !content_type.contains("text/html") {
+        anyhow::bail!("Not an HTML page: {content_type}");
+    }
+
+    // Only read first 64KB to avoid downloading huge pages
+    let body = resp.text().await?;
+    let body = if body.len() > 65536 { &body[..65536] } else { &body };
+
+    let mut title = None;
+    let mut description = None;
+    let mut thumb_url = None;
+
+    // Simple regex-free OG tag parser — look for <meta property="og:..." content="...">
+    for segment in body.split("<meta ") {
+        let seg_lower = segment.to_lowercase();
+        if let Some(og_prop) = extract_meta_property(&seg_lower, segment) {
+            match og_prop.0.as_str() {
+                "og:title" => title = Some(og_prop.1),
+                "og:description" => description = Some(og_prop.1),
+                "og:image" => thumb_url = Some(og_prop.1),
+                _ => {}
+            }
+        }
+    }
+
+    // Fallback to <title> tag if no OG title
+    if title.is_none()
+        && let Some(start) = body.find("<title>").or_else(|| body.find("<title "))
+        && let Some(end) = body[start..].find("</title>")
+    {
+        let t = &body[start..start + end];
+        let t = t.split('>').nth(1).unwrap_or(t);
+        title = Some(html_decode(t.trim()));
+    }
+
+    if title.is_none() && description.is_none() {
+        anyhow::bail!("No OpenGraph or title metadata found");
+    }
+
+    Ok(LinkPreview {
+        url: url.to_string(),
+        title,
+        description,
+        thumb_url,
+    })
+}
+
+/// Extract a meta property="og:..." content="..." pair from a <meta> tag fragment.
+fn extract_meta_property(seg_lower: &str, seg_original: &str) -> Option<(String, String)> {
+    // Find property="og:..."
+    let prop_start = seg_lower.find("property=\"og:")
+        .or_else(|| seg_lower.find("property='og:"))?;
+    let quote_char = if seg_lower.as_bytes().get(prop_start + 10) == Some(&b'\'') { '\'' } else { '"' };
+    let prop_val_start = prop_start + 10; // length of 'property="'
+    let prop_val_end = seg_lower[prop_val_start..].find(quote_char)?;
+    let prop_name = seg_original[prop_val_start..prop_val_start + prop_val_end].to_string();
+
+    // Find content="..."
+    let content_start = seg_lower.find("content=\"")
+        .or_else(|| seg_lower.find("content='"))?;
+    let cq = if seg_lower.as_bytes().get(content_start + 8) == Some(&b'\'') { '\'' } else { '"' };
+    let content_val_start = content_start + 9;
+    let content_val_end = seg_lower[content_val_start..].find(cq)?;
+    let content_val = html_decode(&seg_original[content_val_start..content_val_start + content_val_end]);
+
+    Some((prop_name, content_val))
+}
+
+/// Basic HTML entity decoding.
+fn html_decode(s: &str) -> String {
+    s.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&#x27;", "'")
+        .replace("&apos;", "'")
+}
+
 /// Upload a media file to an AT Protocol PDS, pin it with a record, and return
 /// a publicly accessible URL.
 ///
@@ -388,6 +513,44 @@ mod tests {
         assert_eq!(parsed.url, preview.url);
         assert_eq!(parsed.title.as_deref(), Some("Great Article"));
         assert_eq!(parsed.description.as_deref(), Some("An interesting read"));
+    }
+
+    #[test]
+    fn reaction_roundtrip() {
+        let reaction = Reaction {
+            emoji: "🔥".to_string(),
+            msgid: Some("abc123".to_string()),
+        };
+
+        let tags = reaction.to_tags();
+        assert_eq!(tags.get("+react").unwrap(), "🔥");
+        assert_eq!(tags.get("+reply").unwrap(), "abc123");
+
+        let parsed = Reaction::from_tags(&tags).unwrap();
+        assert_eq!(parsed.emoji, "🔥");
+        assert_eq!(parsed.msgid.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn reaction_no_msgid() {
+        let reaction = Reaction {
+            emoji: "❤️".to_string(),
+            msgid: None,
+        };
+
+        let tags = reaction.to_tags();
+        assert!(tags.get("+reply").is_none());
+
+        let parsed = Reaction::from_tags(&tags).unwrap();
+        assert_eq!(parsed.emoji, "❤️");
+        assert!(parsed.msgid.is_none());
+    }
+
+    #[test]
+    fn html_decode_basic() {
+        assert_eq!(html_decode("hello &amp; world"), "hello & world");
+        assert_eq!(html_decode("&lt;b&gt;bold&lt;/b&gt;"), "<b>bold</b>");
+        assert_eq!(html_decode("it&#39;s"), "it's");
     }
 
     #[test]

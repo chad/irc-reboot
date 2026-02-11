@@ -1548,3 +1548,60 @@ async fn media_tags_passthrough() {
     handle2.quit(None).await.unwrap();
     server_handle.abort();
 }
+
+#[tokio::test]
+async fn tagmsg_and_reactions() {
+    let (addr, server_handle) = start_test_server(empty_resolver()).await;
+
+    let config1 = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "alice".to_string(),
+        user: "alice".to_string(),
+        realname: "Alice".to_string(),
+        ..Default::default()
+    };
+    let (handle1, mut events1) = client::connect(config1, None);
+    expect_event(&mut events1, 2000, |e| matches!(e, Event::Registered { .. }), "Alice registered").await;
+    handle1.join("#react").await.unwrap();
+    expect_event(&mut events1, 2000, |e| matches!(e, Event::Joined { .. }), "Alice joined").await;
+
+    let config2 = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "bob".to_string(),
+        user: "bob".to_string(),
+        realname: "Bob".to_string(),
+        ..Default::default()
+    };
+    let (handle2, mut events2) = client::connect(config2, None);
+    expect_event(&mut events2, 2000, |e| matches!(e, Event::Registered { .. }), "Bob registered").await;
+    handle2.join("#react").await.unwrap();
+    expect_event(&mut events2, 2000, |e| matches!(e, Event::Joined { .. }), "Bob joined").await;
+
+    // Drain bob's join from alice
+    expect_event(&mut events1, 2000, |e| matches!(e, Event::Joined { nick, .. } if nick == "bob"), "Alice sees bob").await;
+
+    // Alice sends a reaction via TAGMSG
+    let reaction = irc_at_sdk::media::Reaction {
+        emoji: "🔥".to_string(),
+        msgid: None,
+    };
+    handle1.send_tagmsg("#react", reaction.to_tags()).await.unwrap();
+
+    // Bob should receive the TAGMSG with reaction tags
+    let msg = expect_event(
+        &mut events2, 2000,
+        |e| matches!(e, Event::TagMsg { from, target, .. } if from == "alice" && target == "#react"),
+        "Bob receives TAGMSG",
+    ).await;
+
+    if let Event::TagMsg { tags, .. } = msg {
+        let parsed = irc_at_sdk::media::Reaction::from_tags(&tags).unwrap();
+        assert_eq!(parsed.emoji, "🔥");
+    } else {
+        panic!("Expected TagMsg event");
+    }
+
+    handle1.quit(None).await.unwrap();
+    handle2.quit(None).await.unwrap();
+    server_handle.abort();
+}

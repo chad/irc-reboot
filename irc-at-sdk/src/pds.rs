@@ -133,3 +133,86 @@ pub async fn verify_session(pds_url: &str, access_jwt: &str) -> Result<SessionIn
 
     Ok(info)
 }
+
+/// A Bluesky user profile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlueskyProfile {
+    pub did: String,
+    pub handle: String,
+    #[serde(rename = "displayName")]
+    pub display_name: Option<String>,
+    pub description: Option<String>,
+    pub avatar: Option<String>,
+    #[serde(rename = "followersCount")]
+    pub followers_count: Option<u64>,
+    #[serde(rename = "followsCount")]
+    pub follows_count: Option<u64>,
+    #[serde(rename = "postsCount")]
+    pub posts_count: Option<u64>,
+}
+
+/// Fetch a Bluesky profile from the public API.
+/// This uses the public AppView endpoint (no auth needed).
+pub async fn fetch_profile(actor: &str) -> Result<BlueskyProfile> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()?;
+
+    let url = format!(
+        "https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor={}",
+        percent_encode(actor),
+    );
+
+    let resp = client.get(&url)
+        .send().await?
+        .error_for_status()
+        .context("Failed to fetch Bluesky profile")?;
+
+    let profile: BlueskyProfile = resp.json().await
+        .context("Failed to parse Bluesky profile")?;
+
+    Ok(profile)
+}
+
+fn percent_encode(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' | ':' => c.to_string(),
+            _ => format!("%{:02X}", c as u8),
+        })
+        .collect()
+}
+
+/// Format a profile for display in WHOIS-style output.
+impl BlueskyProfile {
+    pub fn format_lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+
+        let name = self.display_name.as_deref().unwrap_or(&self.handle);
+        lines.push(format!("📇 {name} (@{})", self.handle));
+
+        if let Some(ref desc) = self.description {
+            // Truncate to first line or 200 chars
+            let short = desc.lines().next().unwrap_or(desc);
+            let short = if short.len() > 200 {
+                format!("{}…", &short[..200])
+            } else {
+                short.to_string()
+            };
+            lines.push(format!("  {short}"));
+        }
+
+        let followers = self.followers_count.unwrap_or(0);
+        let following = self.follows_count.unwrap_or(0);
+        let posts = self.posts_count.unwrap_or(0);
+        lines.push(format!(
+            "  {followers} followers · {following} following · {posts} posts"
+        ));
+
+        if let Some(ref avatar) = self.avatar {
+            lines.push(format!("  🖼 {avatar}"));
+        }
+
+        lines
+    }
+}

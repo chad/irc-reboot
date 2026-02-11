@@ -119,10 +119,21 @@ pub struct App {
     pub picker: Option<ratatui_image::picker::Picker>,
     /// Prepared image protocol states for rendering, keyed by URL.
     pub image_protos: HashMap<String, ratatui_image::protocol::StatefulProtocol>,
+    /// Channel for background tasks to send results back to the main loop.
+    pub bg_result_tx: tokio::sync::mpsc::Sender<BgResult>,
+    /// Receiver end (held by main loop).
+    pub bg_result_rx: Option<tokio::sync::mpsc::Receiver<BgResult>>,
+}
+
+/// Results from background tasks that need to update the UI.
+pub enum BgResult {
+    /// Profile lines to display in a buffer.
+    ProfileLines(String, Vec<String>),
 }
 
 impl App {
     pub fn new(nick: &str, vi_mode: bool) -> Self {
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
         let mut buffers = BTreeMap::new();
         let mut status = Buffer::new("status");
         let mode_name = if vi_mode { "vi" } else { "emacs" };
@@ -146,6 +157,8 @@ impl App {
             image_cache: Arc::new(Mutex::new(HashMap::new())),
             picker: None,
             image_protos: HashMap::new(),
+            bg_result_tx: tx,
+            bg_result_rx: Some(rx),
         }
     }
 

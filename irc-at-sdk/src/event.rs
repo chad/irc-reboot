@@ -28,6 +28,13 @@ pub enum Event {
         tags: std::collections::HashMap<String, String>,
     },
 
+    /// A TAGMSG (tags only, no body) — used for reactions, typing indicators, etc.
+    TagMsg {
+        from: String,
+        target: String,
+        tags: std::collections::HashMap<String, String>,
+    },
+
     /// NAMES list for a channel.
     Names {
         channel: String,

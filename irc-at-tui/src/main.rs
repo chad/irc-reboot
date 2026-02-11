@@ -324,7 +324,21 @@ async fn run_app(
 
         // Drain IRC events
         while let Ok(evt) = events.try_recv() {
-            process_irc_event(app, evt);
+            process_irc_event(app, evt, handle);
+        }
+
+        // Drain background task results
+        if let Some(mut bg_rx) = app.bg_result_rx.take() {
+            while let Ok(result) = bg_rx.try_recv() {
+                match result {
+                    crate::app::BgResult::ProfileLines(buf, lines) => {
+                        for line in lines {
+                            app.buffer_mut(&buf).push_system(&format!("*** {line}"));
+                        }
+                    }
+                }
+            }
+            app.bg_result_rx = Some(bg_rx);
         }
 
         if app.should_quit {
@@ -335,7 +349,7 @@ async fn run_app(
     Ok(())
 }
 
-fn process_irc_event(app: &mut App, event: Event) {
+fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle) {
     match event {
         Event::Connected => {
             app.connection_state = "connected".to_string();
@@ -420,7 +434,53 @@ fn process_irc_event(app: &mut App, event: Event) {
                     image_url: img_url,
                 });
             } else {
-                app.chat_msg(&target, &from, &text);
+                // Check for link preview in tags
+                let link_preview = irc_at_sdk::media::LinkPreview::from_tags(&tags);
+                if let Some(preview) = link_preview {
+                    let buf_name = if !target.starts_with('#') && !target.starts_with('&') {
+                        if from == app.nick { target.clone() } else { from.clone() }
+                    } else {
+                        target.clone()
+                    };
+                    let display = format_link_preview(&preview);
+                    app.buffer_mut(&buf_name).push(crate::app::BufferLine {
+                        timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                        from: from.clone(),
+                        text: display,
+                        is_system: false,
+                        image_url: None,
+                    });
+                } else {
+                    app.chat_msg(&target, &from, &text);
+
+                    // Auto-fetch link previews for URLs in messages (from others)
+                    if from != app.nick && let Some(url) = extract_url(&text) {
+                        let handle_clone = handle.clone();
+                        let target_clone = target.clone();
+                        tokio::spawn(async move {
+                            if let Ok(preview) = irc_at_sdk::media::fetch_link_preview(&url).await {
+                                let _ = handle_clone.send_link_preview(&target_clone, &preview).await;
+                            }
+                        });
+                    }
+                }
+            }
+        }
+        Event::TagMsg { from, target, tags } => {
+            // Handle reactions
+            if let Some(reaction) = irc_at_sdk::media::Reaction::from_tags(&tags) {
+                let buf_name = if !target.starts_with('#') && !target.starts_with('&') {
+                    if from == app.nick { target.clone() } else { from.clone() }
+                } else {
+                    target.clone()
+                };
+                app.buffer_mut(&buf_name).push(crate::app::BufferLine {
+                    timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                    from: String::new(),
+                    text: format!("  {} reacted {}", from, reaction.emoji),
+                    is_system: true,
+                    image_url: None,
+                });
             }
         }
         Event::ModeChanged { channel, mode, arg, set_by } => {
@@ -520,6 +580,27 @@ fn process_irc_event(app: &mut App, event: Event) {
         Event::WhoisReply { nick: _, info } => {
             let buf = app.active_buffer.clone();
             app.buffer_mut(&buf).push_system(&format!("*** {info}"));
+
+            // If this is the "AT Protocol handle" line, fetch the full profile
+            if info.contains("AT Protocol handle:") {
+                let handle_str = info.split("AT Protocol handle:").nth(1)
+                    .unwrap_or("").trim().to_string();
+                if !handle_str.is_empty() {
+                    let bg_tx = app.bg_result_tx.clone();
+                    let buf_clone = buf.clone();
+                    let avatar_cache = app.image_cache.clone();
+                    tokio::spawn(async move {
+                        if let Ok(profile) = irc_at_sdk::pds::fetch_profile(&handle_str).await {
+                            // Cache avatar for inline rendering
+                            if let Some(ref avatar_url) = profile.avatar {
+                                fetch_image_if_needed_direct(&avatar_cache, avatar_url);
+                            }
+                            let lines = profile.format_lines();
+                            let _ = bg_tx.send(crate::app::BgResult::ProfileLines(buf_clone, lines)).await;
+                        }
+                    });
+                }
+            }
         }
         Event::RawLine(_) => {}
     }
@@ -553,6 +634,49 @@ async fn process_input(
                     handle.raw(&format!("PART {channel}")).await?;
                 } else {
                     app.status_msg("Not in a channel");
+                }
+            }
+            "/react" | "/r" => {
+                if arg.is_empty() {
+                    app.status_msg("Usage: /react <emoji>");
+                } else {
+                    let target = app.active_buffer.clone();
+                    if target != "status" {
+                        let reaction = irc_at_sdk::media::Reaction {
+                            emoji: arg.trim().to_string(),
+                            msgid: None, // TODO: track message IDs for targeted reactions
+                        };
+                        handle.send_reaction(&target, &reaction).await?;
+                        let nick = app.nick.clone();
+                        app.buffer_mut(&target).push(crate::app::BufferLine {
+                            timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                            from: String::new(),
+                            text: format!("  {nick} reacted {}", reaction.emoji),
+                            is_system: true,
+                            image_url: None,
+                        });
+                    }
+                }
+            }
+            "/preview" => {
+                if arg.is_empty() {
+                    app.status_msg("Usage: /preview <url>");
+                } else {
+                    let target = app.active_buffer.clone();
+                    let url = arg.trim().to_string();
+                    let handle_clone = handle.clone();
+                    let buf = target.clone();
+                    app.buffer_mut(&buf).push_system(&format!("Fetching preview for {url}..."));
+                    tokio::spawn(async move {
+                        match irc_at_sdk::media::fetch_link_preview(&url).await {
+                            Ok(preview) => {
+                                let _ = handle_clone.send_link_preview(&buf, &preview).await;
+                            }
+                            Err(e) => {
+                                tracing::warn!("Link preview failed for {url}: {e}");
+                            }
+                        }
+                    });
                 }
             }
             "/me" => {
@@ -787,6 +911,8 @@ async fn process_input(
                 app.status_msg("  /mode +i / -i     - Set/unset invite-only");
                 app.status_msg("  /me <action>      - Send action message");
                 app.status_msg("  /whois nick       - Show user info + DID");
+                app.status_msg("  /react <emoji>    - React to the channel");
+                app.status_msg("  /preview <url>    - Fetch and share a link preview");
                 app.status_msg("  /media <path> [alt] - Upload and share a file");
                 app.status_msg("  /media --post <path> [alt] - Upload + cross-post to Bluesky");
                 app.status_msg("  /crosspost <path> [alt] - Same as /media --post");
@@ -939,6 +1065,11 @@ async fn upload_and_send_media(
     Ok(())
 }
 
+/// Same as fetch_image_if_needed but callable from async contexts with a cloned cache.
+fn fetch_image_if_needed_direct(cache: &crate::app::ImageCache, url: &str) {
+    fetch_image_if_needed(cache, url);
+}
+
 /// Kick off a background fetch for an image URL if not already cached.
 fn fetch_image_if_needed(cache: &crate::app::ImageCache, url: &str) {
     let mut guard = cache.lock().unwrap();
@@ -973,6 +1104,41 @@ fn fetch_image_if_needed(cache: &crate::app::ImageCache, url: &str) {
 }
 
 /// Format a media attachment for display in the TUI.
+fn format_link_preview(preview: &irc_at_sdk::media::LinkPreview) -> String {
+    let mut parts = vec!["🔗".to_string()];
+    if let Some(ref title) = preview.title {
+        parts.push(title.clone());
+    }
+    if let Some(ref desc) = preview.description {
+        // Truncate long descriptions
+        let short = if desc.len() > 120 {
+            format!("{}…", &desc[..120])
+        } else {
+            desc.clone()
+        };
+        parts.push(format!("— {short}"));
+    }
+    parts.push(format!("({})", preview.url));
+    parts.join(" ")
+}
+
+/// Extract the first http/https URL from a message.
+fn extract_url(text: &str) -> Option<String> {
+    for word in text.split_whitespace() {
+        if (word.starts_with("https://") || word.starts_with("http://"))
+            && word.len() > 10
+            // Don't preview our own CDN/PDS URLs
+            && !word.contains("cdn.bsky.app")
+            && !word.contains("/xrpc/")
+        {
+            // Strip trailing punctuation
+            let url = word.trim_end_matches(['.', ',', ')', ']', ';']);
+            return Some(url.to_string());
+        }
+    }
+    None
+}
+
 fn format_media_display(media: &irc_at_sdk::media::MediaAttachment) -> String {
     let type_icon = if media.is_image() {
         "🖼"

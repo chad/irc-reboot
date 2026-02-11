@@ -115,6 +115,50 @@ impl ClientHandle {
     ) -> Result<()> {
         self.send_tagged(target, &media.fallback_text(), media.to_tags()).await
     }
+
+    /// Send a TAGMSG (tags-only, no body) to a target.
+    pub async fn send_tagmsg(
+        &self,
+        target: &str,
+        tags: std::collections::HashMap<String, String>,
+    ) -> Result<()> {
+        let msg = crate::irc::Message {
+            tags,
+            prefix: None,
+            command: "TAGMSG".to_string(),
+            params: vec![target.to_string()],
+        };
+        self.cmd_tx.send(Command::Raw(msg.to_string())).await?;
+        Ok(())
+    }
+
+    /// Send a reaction to a target (channel or user).
+    /// Falls back to PRIVMSG for plain clients.
+    pub async fn send_reaction(
+        &self,
+        target: &str,
+        reaction: &crate::media::Reaction,
+    ) -> Result<()> {
+        // Send as TAGMSG for rich clients
+        self.send_tagmsg(target, reaction.to_tags()).await?;
+        // Also send as PRIVMSG fallback so plain clients see it
+        let fallback = format!("\x01ACTION reacted with {}\x01", reaction.emoji);
+        self.privmsg(target, &fallback).await
+    }
+
+    /// Send a link preview as a tagged message.
+    pub async fn send_link_preview(
+        &self,
+        target: &str,
+        preview: &crate::media::LinkPreview,
+    ) -> Result<()> {
+        let fallback = match (&preview.title, &preview.description) {
+            (Some(t), Some(d)) => format!("🔗 {} — {} ({})", t, d, preview.url),
+            (Some(t), None) => format!("🔗 {} ({})", t, preview.url),
+            _ => format!("🔗 {}", preview.url),
+        };
+        self.send_tagged(target, &fallback, preview.to_tags()).await
+    }
 }
 
 /// Connect to an IRC server and run the client.
@@ -480,6 +524,16 @@ where
                                 let text = msg.params[1].clone();
                                 let tags = msg.tags.clone();
                                 let _ = event_tx.send(Event::Message { from, target, text, tags }).await;
+                            }
+                        }
+                        "TAGMSG" => {
+                            if !msg.params.is_empty() {
+                                let from = msg.prefix.as_deref()
+                                    .and_then(|p| p.split('!').next())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let target = msg.params[0].clone();
+                                let _ = event_tx.send(Event::TagMsg { from, target, tags: msg.tags.clone() }).await;
                             }
                         }
                         _ => {}
