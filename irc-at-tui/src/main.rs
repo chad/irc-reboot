@@ -581,25 +581,30 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
             let buf = app.active_buffer.clone();
             app.buffer_mut(&buf).push_system(&format!("*** {info}"));
 
-            // If this is the "AT Protocol handle" line, fetch the full profile
-            if info.contains("AT Protocol handle:") {
-                let handle_str = info.split("AT Protocol handle:").nth(1)
-                    .unwrap_or("").trim().to_string();
-                if !handle_str.is_empty() {
-                    let bg_tx = app.bg_result_tx.clone();
-                    let buf_clone = buf.clone();
-                    let avatar_cache = app.image_cache.clone();
-                    tokio::spawn(async move {
-                        if let Ok(profile) = irc_at_sdk::pds::fetch_profile(&handle_str).await {
-                            // Cache avatar for inline rendering
-                            if let Some(ref avatar_url) = profile.avatar {
-                                fetch_image_if_needed_direct(&avatar_cache, avatar_url);
-                            }
-                            let lines = profile.format_lines();
-                            let _ = bg_tx.send(crate::app::BgResult::ProfileLines(buf_clone, lines)).await;
+            // Fetch Bluesky profile on the "is authenticated as" line (has the DID).
+            // We prefer using the DID since it's always present for authenticated users.
+            // The handle line (671) comes after, but we don't need to fetch again.
+            let actor = if info.contains("is authenticated as") {
+                info.split_whitespace()
+                    .find(|s| s.starts_with("did:"))
+                    .map(|s| s.to_string())
+            } else {
+                None
+            };
+
+            if let Some(actor) = actor {
+                let bg_tx = app.bg_result_tx.clone();
+                let buf_clone = buf.clone();
+                let avatar_cache = app.image_cache.clone();
+                tokio::spawn(async move {
+                    if let Ok(profile) = irc_at_sdk::pds::fetch_profile(&actor).await {
+                        if let Some(ref avatar_url) = profile.avatar {
+                            fetch_image_if_needed_direct(&avatar_cache, avatar_url);
                         }
-                    });
-                }
+                        let lines = profile.format_lines();
+                        let _ = bg_tx.send(crate::app::BgResult::ProfileLines(buf_clone, lines)).await;
+                    }
+                });
             }
         }
         Event::RawLine(_) => {}
