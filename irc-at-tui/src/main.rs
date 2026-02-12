@@ -93,12 +93,18 @@ async fn main() -> Result<()> {
     };
     eprintln!("Connecting to {} as {} ({auth_status})...", cli.server, cli.nick);
 
+    // Auto-detect TLS from port 6697
+    let use_tls = cli.tls || cli.server.ends_with(":6697");
+    if use_tls && !cli.tls {
+        eprintln!("  (auto-enabling TLS for port 6697)");
+    }
+
     let config = ConnectConfig {
         server_addr: cli.server.clone(),
         nick: cli.nick.clone(),
         user: cli.nick.clone(),
         realname: "IRC AT TUI Client".to_string(),
-        tls: cli.tls,
+        tls: use_tls,
         tls_insecure: cli.tls_insecure,
     };
 
