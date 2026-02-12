@@ -365,7 +365,6 @@ where
     W: tokio::io::AsyncWrite + Unpin,
 {
     // Always negotiate capabilities (message-tags, and optionally sasl)
-    eprintln!("  Sending CAP LS, NICK, USER...");
     writer.write_all(b"CAP LS 302\r\n").await?;
 
     writer
@@ -406,7 +405,7 @@ where
                         }
                         "903" => {
                             sasl_in_progress = false;
-                            eprintln!("  SASL authentication successful!");
+                            // eprintln!("  SASL authentication successful!");
                             if let Some(ref signer) = signer {
                                 let _ = event_tx.send(Event::Authenticated { did: signer.did().to_string() }).await;
                             }
@@ -415,13 +414,13 @@ where
                         "904" => {
                             sasl_in_progress = false;
                             let reason = msg.params.get(1).cloned().unwrap_or_else(|| "Unknown".to_string());
-                            eprintln!("  SASL authentication FAILED: {reason}");
+                            // eprintln!("  SASL authentication FAILED: {reason}");
                             let _ = event_tx.send(Event::AuthFailed { reason }).await;
                             writer.write_all(b"CAP END\r\n").await?;
                         }
                         "001" => {
                             let nick = msg.params.first().cloned().unwrap_or_default();
-                            eprintln!("  Registered as {nick}");
+                            // eprintln!("  Registered as {nick}");
                             let _ = event_tx.send(Event::Registered { nick }).await;
                         }
                         "353" => {
@@ -666,7 +665,7 @@ async fn handle_cap_response<W: AsyncWrite + Unpin>(
     match subcmd.as_deref() {
         Some("LS") => {
             let caps_str = msg.params.last().map(|s| s.as_str()).unwrap_or("");
-            eprintln!("  Server capabilities: {caps_str}");
+            // eprintln!("  Server capabilities: {caps_str}");
             let mut req_caps = Vec::new();
             if caps_str.contains("message-tags") {
                 req_caps.push("message-tags");
@@ -675,31 +674,31 @@ async fn handle_cap_response<W: AsyncWrite + Unpin>(
                 req_caps.push("sasl");
             }
             if req_caps.is_empty() {
-                eprintln!("  No caps to request, sending CAP END");
+                // eprintln!("  No caps to request, sending CAP END");
                 writer.write_all(b"CAP END\r\n").await?;
             } else {
-                eprintln!("  Requesting: {}", req_caps.join(" "));
+                // eprintln!("  Requesting: {}", req_caps.join(" "));
                 let req = format!("CAP REQ :{}\r\n", req_caps.join(" "));
                 writer.write_all(req.as_bytes()).await?;
             }
         }
         Some("ACK") => {
             let caps = msg.params.last().map(|s| s.as_str()).unwrap_or("");
-            eprintln!("  Capabilities acknowledged: {caps}");
+            // eprintln!("  Capabilities acknowledged: {caps}");
             if caps.contains("sasl") {
                 *sasl_in_progress = true;
-                eprintln!("  Starting SASL ATPROTO-CHALLENGE...");
+                // eprintln!("  Starting SASL ATPROTO-CHALLENGE...");
                 writer
                     .write_all(b"AUTHENTICATE ATPROTO-CHALLENGE\r\n")
                     .await?;
             } else {
                 // Got message-tags but no sasl (or no signer) — done with CAP
-                eprintln!("  No SASL needed, sending CAP END");
+                // eprintln!("  No SASL needed, sending CAP END");
                 writer.write_all(b"CAP END\r\n").await?;
             }
         }
         Some("NAK") => {
-            eprintln!("  Capabilities rejected, sending CAP END");
+            // eprintln!("  Capabilities rejected, sending CAP END");
             writer.write_all(b"CAP END\r\n").await?;
         }
         _ => {}
@@ -713,16 +712,16 @@ async fn handle_authenticate_challenge<W: AsyncWrite + Unpin>(
     writer: &mut W,
 ) -> Result<()> {
     let encoded_challenge = msg.params.first().map(|s| s.as_str()).unwrap_or("");
-    eprintln!("  Received SASL challenge ({} bytes encoded)", encoded_challenge.len());
+    // eprintln!("  Received SASL challenge ({} bytes encoded)", encoded_challenge.len());
 
     // Decode the challenge to raw bytes — these are what we sign
     let challenge_bytes = auth::decode_challenge_bytes(encoded_challenge)?;
-    eprintln!("  Challenge decoded ({} bytes), signing with {}...", challenge_bytes.len(), signer.did());
+    // eprintln!("  Challenge decoded ({} bytes), signing with {}...", challenge_bytes.len(), signer.did());
 
     // Produce the response using the signer
     let response = signer.respond(&challenge_bytes)?;
     let encoded = auth::encode_response(&response);
-    eprintln!("  Sending AUTHENTICATE response ({} bytes)", encoded.len());
+    // eprintln!("  Sending AUTHENTICATE response ({} bytes)", encoded.len());
 
     writer
         .write_all(format!("AUTHENTICATE {encoded}\r\n").as_bytes())
