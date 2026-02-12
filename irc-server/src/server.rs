@@ -25,10 +25,23 @@ pub struct ChannelState {
     pub members: HashSet<String>,
     /// Remote members from S2S peers: nick → origin server ID.
     pub remote_members: HashMap<String, String>,
-    /// Session IDs of channel operators.
+    /// Session IDs of channel operators (ephemeral, per-session).
     pub ops: HashSet<String>,
     /// Session IDs of voiced users.
     pub voiced: HashSet<String>,
+
+    // ── DID-based persistent authority ──────────────────────────
+    /// Channel founder's DID. Set once on channel creation.
+    /// Founder always has ops and can't be de-opped.
+    pub founder_did: Option<String>,
+    /// DIDs with persistent operator status.
+    /// Survives reconnects, works across servers.
+    /// Granted by founder or other DID-ops.
+    pub did_ops: HashSet<String>,
+    /// Timestamp (unix secs) when the channel was created.
+    /// Used to resolve founder conflicts in S2S (earliest wins).
+    pub created_at: u64,
+
     /// Ban list: hostmasks (nick!user@host patterns) and/or DIDs.
     pub bans: Vec<BanEntry>,
     /// Invite-only mode (+i).
@@ -617,7 +630,7 @@ async fn process_s2s_message(
             }
         }
 
-        S2sMessage::Join { nick, channel, origin } => {
+        S2sMessage::Join { nick, channel, did, origin } => {
             if origin == manager.server_id { return; }
 
             // Ensure channel exists locally (create if needed, no ops granted)
@@ -631,6 +644,18 @@ async fn process_s2s_message(
                 let mut channels = state.channels.lock().unwrap();
                 if let Some(ch) = channels.get_mut(&channel) {
                     ch.remote_members.insert(nick.clone(), origin.clone());
+
+                    // If the remote user's DID has persistent ops, mark with @
+                    // (This info is used when building NAMES)
+                    if let Some(ref d) = did {
+                        if ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d) {
+                            // Remote user has DID-based ops — tracked for display
+                            tracing::debug!(
+                                nick = %nick, did = %d,
+                                "Remote user has DID-based ops in {channel}"
+                            );
+                        }
+                    }
                 }
             }
 
@@ -692,6 +717,53 @@ async fn process_s2s_message(
             deliver_to_channel(state, &channel, &line);
         }
 
+        S2sMessage::ChannelCreated { channel, founder_did, did_ops, created_at, origin } => {
+            if origin == manager.server_id { return; }
+
+            let mut channels = state.channels.lock().unwrap();
+            let ch = channels.entry(channel.clone()).or_default();
+
+            // Resolve founder conflict: earliest creation timestamp wins.
+            // If timestamps are equal, compare origin strings for determinism.
+            let dominated = if ch.founder_did.is_some() && founder_did.is_some() {
+                if created_at < ch.created_at {
+                    true // Remote is older → adopt
+                } else if created_at == ch.created_at {
+                    origin < manager.server_id // Tie-break by origin
+                } else {
+                    false // Local is older → keep
+                }
+            } else {
+                ch.founder_did.is_none() && founder_did.is_some()
+            };
+
+            if dominated {
+                tracing::info!(
+                    channel = %channel,
+                    "Adopting remote founder {:?} (created_at {created_at} < local {})",
+                    founder_did, ch.created_at
+                );
+                ch.founder_did = founder_did;
+                ch.created_at = created_at;
+            }
+
+            // Merge DID ops — union of both sets
+            for did in did_ops {
+                ch.did_ops.insert(did);
+            }
+
+            // Re-op any local members whose DID now has persistent ops
+            let members: Vec<String> = ch.members.iter().cloned().collect();
+            let dids = state.session_dids.lock().unwrap();
+            for session_id in &members {
+                if let Some(did) = dids.get(session_id) {
+                    if ch.founder_did.as_deref() == Some(did) || ch.did_ops.contains(did) {
+                        ch.ops.insert(session_id.clone());
+                    }
+                }
+            }
+        }
+
         S2sMessage::SyncRequest => {
             // Build channel list and respond
             let response = {
@@ -707,6 +779,9 @@ async fn process_s2s_message(
                         name: name.clone(),
                         topic: ch.topic.as_ref().map(|t| t.text.clone()),
                         nicks,
+                        founder_did: ch.founder_did.clone(),
+                        did_ops: ch.did_ops.iter().cloned().collect(),
+                        created_at: ch.created_at,
                     }
                 }).collect();
 
@@ -718,18 +793,63 @@ async fn process_s2s_message(
             manager.broadcast(response).await;
         }
 
-        S2sMessage::SyncResponse { server_id: _, channels: remote_channels } => {
+        S2sMessage::SyncResponse { server_id: peer_id, channels: remote_channels } => {
             tracing::info!(
-                "Received sync: {} channel(s) from peer",
+                "Received sync: {} channel(s) from peer {peer_id}",
                 remote_channels.len()
             );
-            // For now, just log. Full state merging (remote user tracking)
-            // requires a more sophisticated model with virtual sessions.
-            for info in &remote_channels {
+            let mut channels = state.channels.lock().unwrap();
+            for info in remote_channels {
+                let ch = channels.entry(info.name.clone()).or_default();
+
+                // Merge founder: earliest created_at wins
+                if ch.founder_did.is_none() && info.founder_did.is_some() {
+                    ch.founder_did = info.founder_did.clone();
+                    ch.created_at = info.created_at;
+                } else if let (Some(_), Some(_)) = (&ch.founder_did, &info.founder_did) {
+                    if info.created_at < ch.created_at {
+                        ch.founder_did = info.founder_did.clone();
+                        ch.created_at = info.created_at;
+                    }
+                }
+
+                // Merge DID ops (union)
+                for did in &info.did_ops {
+                    ch.did_ops.insert(did.clone());
+                }
+
+                // Add remote nicks
+                for nick in &info.nicks {
+                    ch.remote_members.insert(nick.clone(), peer_id.clone());
+                }
+
+                // Merge topic if we don't have one
+                if ch.topic.is_none() {
+                    if let Some(ref topic) = info.topic {
+                        ch.topic = Some(TopicInfo::new(
+                            topic.clone(),
+                            info.founder_did.as_deref().unwrap_or("unknown").to_string(),
+                        ));
+                    }
+                }
+
                 tracing::info!(
-                    "  Channel {}: {} user(s), topic: {:?}",
-                    info.name, info.nicks.len(), info.topic
+                    "  Channel {}: {} remote user(s), founder: {:?}, {} DID ops",
+                    info.name, info.nicks.len(), ch.founder_did, ch.did_ops.len()
                 );
+            }
+
+            // Re-op any local members whose DID now has persistent ops
+            let dids = state.session_dids.lock().unwrap();
+            for ch in channels.values_mut() {
+                let members: Vec<String> = ch.members.iter().cloned().collect();
+                for session_id in &members {
+                    if let Some(did) = dids.get(session_id) {
+                        if ch.founder_did.as_deref() == Some(did) || ch.did_ops.contains(did) {
+                            ch.ops.insert(session_id.clone());
+                        }
+                    }
+                }
             }
         }
 

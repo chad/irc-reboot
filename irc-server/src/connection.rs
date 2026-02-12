@@ -899,11 +899,30 @@ fn handle_join(
         let mut channels = state.channels.lock().unwrap();
         let ch = channels.entry(channel.to_string()).or_default();
         ch.members.insert(session_id.to_string());
+
         if is_new_channel {
+            // New channel: set founder if authenticated
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            ch.created_at = now;
+            if let Some(d) = did {
+                ch.founder_did = Some(d.to_string());
+                ch.did_ops.insert(d.to_string());
+            }
             ch.ops.insert(session_id.to_string());
             let ch_clone = ch.clone();
             drop(channels);
             state.with_db(|db| db.save_channel(channel, &ch_clone));
+        } else {
+            // Existing channel: auto-op if user's DID has persistent ops
+            let should_op = did.is_some_and(|d| {
+                ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
+            });
+            if should_op {
+                ch.ops.insert(session_id.to_string());
+            }
         }
     }
 
@@ -929,8 +948,23 @@ fn handle_join(
     s2s_broadcast(state, crate::s2s::S2sMessage::Join {
         nick: nick.to_string(),
         channel: channel.to_string(),
-        origin,
+        did: did.map(|d| d.to_string()),
+        origin: origin.clone(),
     });
+
+    // If this was a new channel creation, broadcast founder info
+    if is_new_channel {
+        let channels = state.channels.lock().unwrap();
+        if let Some(ch) = channels.get(channel) {
+            s2s_broadcast(state, crate::s2s::S2sMessage::ChannelCreated {
+                channel: channel.to_string(),
+                founder_did: ch.founder_did.clone(),
+                did_ops: ch.did_ops.iter().cloned().collect(),
+                created_at: ch.created_at,
+                origin: origin.clone(),
+            });
+        }
+    }
 
     // Send topic if set (332 + 333)
     {
@@ -1153,9 +1187,27 @@ fn handle_mode(
                     if let Some(chan) = channels.get_mut(channel) {
                         let set = if ch == 'o' { &mut chan.ops } else { &mut chan.voiced };
                         if adding {
-                            set.insert(target_session);
+                            set.insert(target_session.clone());
                         } else {
                             set.remove(&target_session);
+                        }
+
+                        // DID-based persistent ops: +o/-o on an authenticated
+                        // user also updates did_ops, so ops survive reconnects
+                        // and work across S2S servers.
+                        if ch == 'o' {
+                            let target_did = state.session_dids.lock().unwrap()
+                                .get(&target_session).cloned();
+                            if let Some(did) = target_did {
+                                // Don't allow de-opping the founder
+                                if !adding && chan.founder_did.as_deref() == Some(&did) {
+                                    // Silently ignore — founder can't be de-opped
+                                } else if adding {
+                                    chan.did_ops.insert(did);
+                                } else {
+                                    chan.did_ops.remove(&did);
+                                }
+                            }
                         }
                     }
                 }

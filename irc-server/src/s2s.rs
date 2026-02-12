@@ -60,6 +60,21 @@ pub enum S2sMessage {
     Join {
         nick: String,
         channel: String,
+        /// Authenticated DID (if any) — used for DID-based ops.
+        did: Option<String>,
+        origin: String,
+    },
+
+    /// A channel was created (carries founder info for authority resolution).
+    #[serde(rename = "channel_created")]
+    ChannelCreated {
+        channel: String,
+        /// DID of the channel founder.
+        founder_did: Option<String>,
+        /// DIDs with operator status.
+        did_ops: Vec<String>,
+        /// Unix timestamp of channel creation (earliest wins in conflicts).
+        created_at: u64,
         origin: String,
     },
 
@@ -116,6 +131,12 @@ pub struct ChannelInfo {
     pub name: String,
     pub topic: Option<String>,
     pub nicks: Vec<String>,
+    /// Channel founder DID.
+    pub founder_did: Option<String>,
+    /// DIDs with persistent operator status.
+    pub did_ops: Vec<String>,
+    /// Channel creation timestamp.
+    pub created_at: u64,
 }
 
 /// State for managing S2S links.
