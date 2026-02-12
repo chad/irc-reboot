@@ -157,10 +157,101 @@ impl ClientHandle {
     }
 }
 
+/// Establish TCP (and optionally TLS) connection to the server.
+///
+/// This is done **before** the TUI starts so that connection errors
+/// are visible on stderr. Returns the established connection for
+/// `connect_with_stream` to use.
+pub async fn establish_connection(
+    config: &ConnectConfig,
+) -> Result<EstablishedConnection> {
+    // Auto-detect TLS from port if not explicitly set
+    let use_tls = config.tls || config.server_addr.ends_with(":6697");
+    let mode = if use_tls { "TLS" } else { "plain" };
+
+    eprintln!("  Resolving {}...", config.server_addr);
+    let tcp = TcpStream::connect(&config.server_addr).await
+        .map_err(|e| anyhow::anyhow!("TCP connect to {} failed: {e}", config.server_addr))?;
+    eprintln!("  TCP connected to {} ({mode})", config.server_addr);
+
+    if use_tls {
+        let tls_config = if config.tls_insecure {
+            eprintln!("  TLS: insecure mode (skipping cert verification)");
+            rustls_insecure_config()
+        } else {
+            eprintln!("  TLS: verifying server certificate...");
+            rustls_default_config()
+        };
+        let connector = TlsConnector::from(Arc::new(tls_config));
+        let server_name = config
+            .server_addr
+            .split(':')
+            .next()
+            .unwrap_or("localhost");
+        let dns_name = rustls::pki_types::ServerName::try_from(server_name.to_string())?;
+        let tls_stream = connector.connect(dns_name, tcp).await
+            .map_err(|e| anyhow::anyhow!("TLS handshake with {} failed: {e}", config.server_addr))?;
+        eprintln!("  TLS handshake complete");
+        Ok(EstablishedConnection::Tls(tls_stream))
+    } else {
+        Ok(EstablishedConnection::Plain(tcp))
+    }
+}
+
+/// A connection that has completed TCP (and optionally TLS) but hasn't
+/// started IRC registration yet.
+pub enum EstablishedConnection {
+    Plain(TcpStream),
+    Tls(tokio_rustls::client::TlsStream<TcpStream>),
+}
+
+/// Connect using an already-established connection.
+///
+/// Returns a handle for sending commands and a receiver for events.
+/// The IRC protocol runs in a spawned task.
+pub fn connect_with_stream(
+    conn: EstablishedConnection,
+    config: ConnectConfig,
+    signer: Option<Arc<dyn ChallengeSigner>>,
+) -> (ClientHandle, mpsc::Receiver<Event>) {
+    let (event_tx, event_rx) = mpsc::channel(256);
+    let (cmd_tx, cmd_rx) = mpsc::channel(64);
+
+    let handle = ClientHandle {
+        cmd_tx: cmd_tx.clone(),
+    };
+
+    tokio::spawn(async move {
+        let _ = event_tx.send(Event::Connected).await;
+        let result = match conn {
+            EstablishedConnection::Plain(tcp) => {
+                let (reader, writer) = tokio::io::split(tcp);
+                run_irc(BufReader::new(reader), writer, &config, signer, event_tx.clone(), cmd_rx).await
+            }
+            EstablishedConnection::Tls(tls) => {
+                let (reader, writer) = tokio::io::split(tls);
+                run_irc(BufReader::new(reader), writer, &config, signer, event_tx.clone(), cmd_rx).await
+            }
+        };
+        if let Err(e) = result {
+            let _ = event_tx
+                .send(Event::Disconnected {
+                    reason: e.to_string(),
+                })
+                .await;
+        }
+    });
+
+    (handle, event_rx)
+}
+
 /// Connect to an IRC server and run the client.
 ///
 /// Returns a handle for sending commands and a receiver for events.
 /// The connection runs in a spawned task.
+///
+/// Note: prefer `establish_connection` + `connect_with_stream` for better
+/// error reporting (connection errors happen before the TUI starts).
 pub fn connect(
     config: ConnectConfig,
     signer: Option<Arc<dyn ChallengeSigner>>,
@@ -191,40 +282,17 @@ async fn run_client(
     event_tx: mpsc::Sender<Event>,
     cmd_rx: mpsc::Receiver<Command>,
 ) -> Result<()> {
-    // Auto-detect TLS from port if not explicitly set
-    let use_tls = config.tls || config.server_addr.ends_with(":6697");
-    let mode = if use_tls { "TLS" } else { "plain" };
-
-    eprintln!("  Resolving {}...", config.server_addr);
-    let tcp = TcpStream::connect(&config.server_addr).await
-        .map_err(|e| anyhow::anyhow!("TCP connect to {} failed: {e}", config.server_addr))?;
-    eprintln!("  TCP connected to {} ({mode})", config.server_addr);
-
-    if use_tls {
-        let tls_config = if config.tls_insecure {
-            eprintln!("  TLS: insecure mode (skipping cert verification)");
-            rustls_insecure_config()
-        } else {
-            eprintln!("  TLS: verifying server certificate...");
-            rustls_default_config()
-        };
-        let connector = TlsConnector::from(Arc::new(tls_config));
-        let server_name = config
-            .server_addr
-            .split(':')
-            .next()
-            .unwrap_or("localhost");
-        let dns_name = rustls::pki_types::ServerName::try_from(server_name.to_string())?;
-        let tls_stream = connector.connect(dns_name, tcp).await
-            .map_err(|e| anyhow::anyhow!("TLS handshake with {} failed: {e}", config.server_addr))?;
-        eprintln!("  TLS handshake complete");
-        let _ = event_tx.send(Event::Connected).await;
-        let (reader, writer) = tokio::io::split(tls_stream);
-        run_irc(BufReader::new(reader), writer, &config, signer, event_tx, cmd_rx).await
-    } else {
-        let _ = event_tx.send(Event::Connected).await;
-        let (reader, writer) = tokio::io::split(tcp);
-        run_irc(BufReader::new(reader), writer, &config, signer, event_tx, cmd_rx).await
+    let conn = establish_connection(&config).await?;
+    let _ = event_tx.send(Event::Connected).await;
+    match conn {
+        EstablishedConnection::Plain(tcp) => {
+            let (reader, writer) = tokio::io::split(tcp);
+            run_irc(BufReader::new(reader), writer, &config, signer, event_tx, cmd_rx).await
+        }
+        EstablishedConnection::Tls(tls) => {
+            let (reader, writer) = tokio::io::split(tls);
+            run_irc(BufReader::new(reader), writer, &config, signer, event_tx, cmd_rx).await
+        }
     }
 }
 

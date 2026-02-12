@@ -108,7 +108,11 @@ async fn main() -> Result<()> {
         tls_insecure: cli.tls_insecure,
     };
 
-    let (handle, mut events) = client::connect(config, signer);
+    // Establish TCP+TLS connection BEFORE entering the TUI.
+    // This way connection errors are visible on stderr.
+    let conn = client::establish_connection(&config).await?;
+
+    let (handle, mut events) = client::connect_with_stream(conn, config, signer);
 
     // Detect terminal image capabilities BEFORE entering raw mode
     #[cfg(feature = "inline-images")]
