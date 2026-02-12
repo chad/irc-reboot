@@ -404,6 +404,38 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
             buf.push_system(&format!("{nick} has left"));
         }
         Event::Message { from, target, text, tags } => {
+            // Try E2EE decryption if we have a key for this channel
+            let (text, was_encrypted) = {
+                let buf_key = if target.starts_with('#') || target.starts_with('&') {
+                    target.to_lowercase()
+                } else if from == app.nick {
+                    target.to_lowercase()
+                } else {
+                    from.to_lowercase()
+                };
+                if let Some(key) = app.channel_keys.get(&buf_key) {
+                    if irc_at_sdk::e2ee::is_encrypted(&text) {
+                        match irc_at_sdk::e2ee::decrypt(key, &text) {
+                            Ok(plaintext) => (plaintext, true),
+                            Err(_) => {
+                                // Wrong key or tampered — show error inline
+                                (format!("🔒 [encrypted message — wrong key or corrupted]"), false)
+                            }
+                        }
+                    } else {
+                        // We have a key but this message isn't encrypted
+                        // (could be from a user who hasn't enabled E2EE)
+                        (text.clone(), false)
+                    }
+                } else if irc_at_sdk::e2ee::is_encrypted(&text) {
+                    // Encrypted but we don't have the key
+                    (format!("🔒 [encrypted message — use /encrypt <passphrase> to decrypt]"), false)
+                } else {
+                    (text.clone(), false)
+                }
+            };
+            let _ = was_encrypted; // may be used later for UI indicators
+
             // Check for media attachment in tags
             let media = irc_at_sdk::media::MediaAttachment::from_tags(&tags);
 
@@ -913,6 +945,43 @@ async fn process_input(
                     handle.raw(arg).await?;
                 }
             }
+            "/encrypt" | "/e2ee" => {
+                let channel = app.active_buffer.clone();
+                if channel == "status" {
+                    app.status_msg("Switch to a channel first, then: /encrypt <passphrase>");
+                } else if arg.is_empty() {
+                    // Check if already encrypted
+                    if app.channel_keys.contains_key(&channel) {
+                        app.status_msg(&format!("🔒 Encryption is ON for {channel}. Use /decrypt to disable."));
+                    } else {
+                        app.status_msg("Usage: /encrypt <passphrase>");
+                        app.status_msg("  Enables E2EE for this channel. All members need the same passphrase.");
+                        app.status_msg("  Messages are encrypted client-side — the server only sees ciphertext.");
+                    }
+                } else {
+                    let key = irc_at_sdk::e2ee::derive_key(arg, &channel);
+                    app.channel_keys.insert(channel.clone(), key);
+                    app.buffer_mut(&channel).push_system(
+                        "🔒 End-to-end encryption enabled. Messages in this channel are now encrypted."
+                    );
+                    app.buffer_mut(&channel).push_system(
+                        "   All members must use the same passphrase to read messages."
+                    );
+                    app.buffer_mut(&channel).push_system(
+                        "   The server cannot read encrypted messages."
+                    );
+                }
+            }
+            "/decrypt" | "/noencrypt" => {
+                let channel = app.active_buffer.clone();
+                if app.channel_keys.remove(&channel).is_some() {
+                    app.buffer_mut(&channel).push_system(
+                        "🔓 Encryption disabled for this channel. Messages will be sent in plaintext."
+                    );
+                } else {
+                    app.status_msg("Encryption is not enabled for this channel.");
+                }
+            }
             "/help" | "/h" => {
                 app.status_msg("Commands:");
                 app.status_msg("  /join #channel    - Join a channel");
@@ -938,6 +1007,8 @@ async fn process_input(
                 app.status_msg("  /crosspost <path> [alt] - Same as /media --post");
                 app.status_msg("  /logout <handle>  - Clear cached OAuth session");
                 app.status_msg("  /quit [message]   - Disconnect");
+                app.status_msg("  /encrypt <pass>   - Enable E2EE for current channel");
+                app.status_msg("  /decrypt          - Disable E2EE for current channel");
                 app.status_msg("  /raw <line>       - Send raw IRC");
                 app.status_msg("  Tab               - Nick completion (or switch buffers if empty)");
                 app.status_msg("  Shift-Tab         - Previous buffer");
@@ -956,7 +1027,20 @@ async fn process_input(
                 "Cannot send messages to the status buffer. Use /msg or switch to a channel.",
             );
         } else {
-            handle.privmsg(&target, input).await?;
+            // Encrypt if E2EE is enabled for this channel
+            let wire_text = if let Some(key) = app.channel_keys.get(&target) {
+                match irc_at_sdk::e2ee::encrypt(key, input) {
+                    Ok(encrypted) => encrypted,
+                    Err(e) => {
+                        app.status_msg(&format!("Encryption failed: {e}"));
+                        return Ok(());
+                    }
+                }
+            } else {
+                input.to_string()
+            };
+            handle.privmsg(&target, &wire_text).await?;
+            // Show plaintext locally (we know what we sent)
             app.chat_msg(&target, &app.nick.clone(), input);
         }
     }

@@ -24,5 +24,7 @@ bs58 = { workspace = true }
 signature = { workspace = true }
 p256 = { workspace = true }
 sha2 = { workspace = true }
+aes-gcm = { workspace = true }
+hkdf = { workspace = true }
 open = { workspace = true }
 dirs = { workspace = true }

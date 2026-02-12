@@ -93,6 +93,9 @@ pub struct MediaUploader {
 }
 
 pub struct App {
+    /// Per-channel E2EE keys, keyed by lowercase channel name.
+    /// Derived from passphrase via HKDF-SHA256.
+    pub channel_keys: HashMap<String, [u8; 32]>,
     /// Named buffers, keyed by lowercase name. "status" is always present.
     pub buffers: BTreeMap<String, Buffer>,
     /// Currently active buffer key.
@@ -147,6 +150,7 @@ impl App {
         let mode = if vi_mode { Mode::Vi } else { Mode::Emacs };
 
         Self {
+            channel_keys: HashMap::new(),
             buffers,
             active_buffer: "status".to_string(),
             editor: LineEditor::new(mode),

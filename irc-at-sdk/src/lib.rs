@@ -17,6 +17,7 @@ pub mod auth;
 pub mod client;
 pub mod crypto;
 pub mod did;
+pub mod e2ee;
 pub mod event;
 pub mod irc;
 pub mod media;
