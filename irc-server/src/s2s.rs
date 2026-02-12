@@ -142,9 +142,9 @@ impl S2sManager {
 
 /// Start the S2S subsystem.
 ///
-/// - Creates (or reuses) an iroh endpoint with the S2S ALPN
-/// - Accepts incoming peer connections
-/// - Returns the manager + event receiver
+/// Returns the manager + event receiver. Incoming S2S connections are
+/// handled by the iroh accept loop in iroh.rs (routed by ALPN), which
+/// calls `handle_incoming_s2s()`.
 pub async fn start(
     _state: Arc<SharedState>,
     endpoint: iroh::Endpoint,
@@ -158,36 +158,28 @@ pub async fn start(
         event_tx: event_tx.clone(),
     });
 
-    // Accept incoming S2S connections
-    let accept_ep = endpoint.clone();
-    let accept_peers = Arc::clone(&manager.peers);
-    let accept_event_tx = event_tx.clone();
-    let accept_server_id = server_id.clone();
-    tokio::spawn(async move {
-        // Note: this accept loop runs alongside the client ALPN accept loop
-        // because iroh demuxes by ALPN. But since we share the same endpoint,
-        // we need to register S2S_ALPN on the endpoint.
-        // For now, this is handled by adding both ALPNs to the endpoint.
-        while let Some(incoming) = accept_ep.accept().await {
-            let peers = Arc::clone(&accept_peers);
-            let event_tx = accept_event_tx.clone();
-            let server_id = accept_server_id.clone();
-            tokio::spawn(async move {
-                match incoming.await {
-                    Ok(conn) => {
-                        let peer_id = conn.remote_id().to_string();
-                        tracing::info!(peer = %peer_id, "S2S incoming connection");
-                        handle_s2s_connection(conn, peers, event_tx, server_id, true).await;
-                    }
-                    Err(e) => {
-                        tracing::warn!("S2S incoming connection failed: {e}");
-                    }
-                }
-            });
-        }
-    });
-
     Ok((manager, event_rx))
+}
+
+/// Handle an incoming S2S connection (called from iroh accept loop).
+pub async fn handle_incoming_s2s(
+    conn: iroh::endpoint::Connection,
+    state: Arc<SharedState>,
+) {
+    let manager = state.s2s_manager.lock().unwrap().clone();
+    let manager = match manager {
+        Some(m) => m,
+        None => {
+            tracing::warn!("Incoming S2S connection but no S2S manager active");
+            return;
+        }
+    };
+    let peer_id = conn.remote_id().to_string();
+    tracing::info!(peer = %peer_id, "S2S incoming connection (routed by ALPN)");
+    let peers = Arc::clone(&manager.peers);
+    let event_tx = manager.event_tx.clone();
+    let server_id = manager.server_id.clone();
+    handle_s2s_connection(conn, peers, event_tx, server_id, true).await;
 }
 
 /// Connect to a peer server by iroh endpoint ID.

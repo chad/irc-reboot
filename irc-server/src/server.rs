@@ -165,6 +165,8 @@ pub struct SharedState {
     pub session_iroh_ids: Mutex<HashMap<String, String>>,
     /// This server's own iroh endpoint ID (advertised in CAP LS).
     pub server_iroh_id: Mutex<Option<String>>,
+    /// S2S manager (if clustering is active).
+    pub s2s_manager: Mutex<Option<Arc<crate::s2s::S2sManager>>>,
     /// Database handle for persistence (None = in-memory only).
     pub db: Option<Mutex<Db>>,
 }
@@ -267,6 +269,7 @@ impl Server {
             cap_message_tags: Mutex::new(HashSet::new()),
             session_iroh_ids: Mutex::new(HashMap::new()),
             server_iroh_id: Mutex::new(None),
+            s2s_manager: Mutex::new(None),
             db: db.map(Mutex::new),
         }))
     }
@@ -343,6 +346,9 @@ impl Server {
                 let s2s_state = Arc::clone(&state);
                 match crate::s2s::start(s2s_state, endpoint.clone()).await {
                     Ok((manager, mut s2s_rx)) => {
+                        // Store manager in shared state so iroh accept loop can route S2S
+                        *state.s2s_manager.lock().unwrap() = Some(Arc::clone(&manager));
+
                         // Connect to configured peers
                         for peer_id in &self.config.s2s_peers {
                             let event_tx = manager.event_tx.clone();

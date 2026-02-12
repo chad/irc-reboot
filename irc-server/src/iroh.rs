@@ -132,7 +132,7 @@ pub async fn start(
 
     let mut builder = iroh::Endpoint::builder()
         .secret_key(secret_key)
-        .alpns(vec![ALPN.to_vec()]);
+        .alpns(vec![ALPN.to_vec(), crate::s2s::S2S_ALPN.to_vec()]);
 
     if let Some(port) = bind_port {
         builder = builder
@@ -153,7 +153,16 @@ pub async fn start(
             let state = Arc::clone(&state);
             tokio::spawn(async move {
                 match incoming.await {
-                    Ok(conn) => handle_connection(conn, state).await,
+                    Ok(conn) => {
+                        // Route by ALPN: client connections vs S2S links
+                        let alpn = conn.alpn();
+                        if alpn == crate::s2s::S2S_ALPN {
+                            tracing::info!("Incoming S2S connection from {}", conn.remote_id());
+                            crate::s2s::handle_incoming_s2s(conn, state).await;
+                        } else {
+                            handle_connection(conn, state).await;
+                        }
+                    }
                     Err(e) => tracing::warn!("Iroh incoming connection failed: {e}"),
                 }
             });
