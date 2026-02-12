@@ -279,6 +279,76 @@ pub async fn establish_iroh_connection(addr: &str) -> Result<EstablishedConnecti
     Ok(EstablishedConnection::Iroh(irc_side))
 }
 
+/// Probe an IRC server for iroh endpoint ID via CAP LS.
+///
+/// Connects via TCP (or TLS for port 6697), sends CAP LS, reads the response,
+/// extracts `iroh=<endpoint-id>` if present, and disconnects cleanly.
+/// Returns `None` if the server doesn't advertise iroh.
+///
+/// This enables automatic iroh transport upgrade: connect cheap (TCP),
+/// discover capabilities, reconnect optimal (iroh QUIC).
+pub async fn discover_iroh_id(server_addr: &str, tls: bool, tls_insecure: bool) -> Option<String> {
+    use tokio::time::timeout;
+    use std::time::Duration;
+
+    let use_tls = tls || server_addr.ends_with(":6697");
+
+    // Give the probe 5 seconds max
+    let result = timeout(Duration::from_secs(5), async {
+        let tcp = TcpStream::connect(server_addr).await.ok()?;
+
+        if use_tls {
+            let tls_config = if tls_insecure {
+                rustls_insecure_config()
+            } else {
+                rustls_default_config()
+            };
+            let connector = TlsConnector::from(Arc::new(tls_config));
+            let host = server_addr.split(':').next().unwrap_or("localhost");
+            let dns_name = rustls::pki_types::ServerName::try_from(host.to_string()).ok()?;
+            let tls_stream = connector.connect(dns_name, tcp).await.ok()?;
+            probe_cap_ls(tls_stream).await
+        } else {
+            probe_cap_ls(tcp).await
+        }
+    }).await;
+
+    result.ok().flatten()
+}
+
+/// Send CAP LS and parse iroh endpoint ID from response.
+async fn probe_cap_ls<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(stream: S) -> Option<String> {
+    let (reader, mut writer) = tokio::io::split(stream);
+    let mut reader = BufReader::new(reader);
+
+    // Send CAP LS and a throwaway NICK/USER so the server doesn't time us out
+    writer.write_all(b"CAP LS 302\r\nNICK _probe\r\nUSER _probe 0 * :probe\r\n").await.ok()?;
+
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line).await.ok()?;
+        if n == 0 { return None; }
+
+        // Look for CAP * LS :...
+        if line.contains("CAP") && line.contains("LS") {
+            // Find iroh=<id> in the caps string
+            for token in line.split_whitespace() {
+                if let Some(id) = token.strip_prefix("iroh=") {
+                    // Clean up: send QUIT
+                    let _ = writer.write_all(b"QUIT\r\n").await;
+                    let _ = writer.shutdown().await;
+                    return Some(id.trim().to_string());
+                }
+            }
+            // Server responded to CAP LS but no iroh — done
+            let _ = writer.write_all(b"QUIT\r\n").await;
+            let _ = writer.shutdown().await;
+            return None;
+        }
+    }
+}
+
 /// Connect using an already-established connection.
 ///
 /// Returns a handle for sending commands and a receiver for events.

@@ -97,8 +97,31 @@ async fn main() -> Result<()> {
         "guest"
     };
     // Establish connection BEFORE entering the TUI so errors are visible on stderr.
-    let conn = if let Some(ref iroh_addr) = cli.iroh_addr {
-        eprintln!("Connecting via iroh to {} as {} ({auth_status})...", iroh_addr, cli.nick);
+    //
+    // Transport priority:
+    //   1. Explicit --iroh-addr (user knows the endpoint ID)
+    //   2. Auto-discovered iroh (probe server via CAP LS, upgrade if available)
+    //   3. TCP/TLS (fallback)
+    let iroh_addr = if let Some(ref addr) = cli.iroh_addr {
+        Some(addr.clone())
+    } else {
+        // Probe the server for iroh support
+        eprintln!("Probing {} for iroh transport...", cli.server);
+        let use_tls = cli.tls || cli.server.ends_with(":6697");
+        match client::discover_iroh_id(&cli.server, use_tls, cli.tls_insecure).await {
+            Some(id) => {
+                eprintln!("  Server advertises iroh: {}", &id[..16.min(id.len())]);
+                Some(id)
+            }
+            None => {
+                eprintln!("  No iroh available, using TCP");
+                None
+            }
+        }
+    };
+
+    let conn = if let Some(ref iroh_addr) = iroh_addr {
+        eprintln!("Connecting via iroh to {} as {} ({auth_status})...", &iroh_addr[..16.min(iroh_addr.len())], cli.nick);
         client::establish_iroh_connection(iroh_addr).await?
     } else {
         eprintln!("Connecting to {} as {} ({auth_status})...", cli.server, cli.nick);
@@ -120,7 +143,7 @@ async fn main() -> Result<()> {
     };
 
     let config = ConnectConfig {
-        server_addr: cli.iroh_addr.as_deref().unwrap_or(&cli.server).to_string(),
+        server_addr: iroh_addr.as_deref().unwrap_or(&cli.server).to_string(),
         nick: cli.nick.clone(),
         user: cli.nick.clone(),
         realname: "IRC AT TUI Client".to_string(),

@@ -543,10 +543,15 @@ fn handle_cap(
     match subcmd.as_deref() {
         Some("LS") => {
             conn.cap_negotiating = true;
+            // Build capability list, including iroh endpoint ID if available
+            let mut caps = String::from("sasl message-tags");
+            if let Some(ref iroh_id) = *state.server_iroh_id.lock().unwrap() {
+                caps.push_str(&format!(" iroh={iroh_id}"));
+            }
             let reply = Message::from_server(
                 server_name,
                 "CAP",
-                vec![conn.nick_or_star(), "LS", "sasl message-tags"],
+                vec![conn.nick_or_star(), "LS", &caps],
             );
             send(state, session_id, format!("{reply}\r\n"));
         }

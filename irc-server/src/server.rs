@@ -163,6 +163,8 @@ pub struct SharedState {
     pub cap_message_tags: Mutex<HashSet<String>>,
     /// session_id -> iroh endpoint ID (for connections via iroh transport).
     pub session_iroh_ids: Mutex<HashMap<String, String>>,
+    /// This server's own iroh endpoint ID (advertised in CAP LS).
+    pub server_iroh_id: Mutex<Option<String>>,
     /// Database handle for persistence (None = in-memory only).
     pub db: Option<Mutex<Db>>,
 }
@@ -264,6 +266,7 @@ impl Server {
             session_handles: Mutex::new(HashMap::new()),
             cap_message_tags: Mutex::new(HashSet::new()),
             session_iroh_ids: Mutex::new(HashMap::new()),
+            server_iroh_id: Mutex::new(None),
             db: db.map(Mutex::new),
         }))
     }
@@ -322,6 +325,7 @@ impl Server {
                     endpoint.online().await;
                     let id = endpoint.id();
                     tracing::info!("Iroh ready. Connect with: --iroh-addr {id}");
+                    *state.server_iroh_id.lock().unwrap() = Some(id.to_string());
                     Some(endpoint)
                 }
                 Err(e) => {
