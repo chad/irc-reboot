@@ -340,46 +340,49 @@ impl Server {
             None
         };
 
-        // Start S2S clustering if peers are configured
-        if !self.config.s2s_peers.is_empty() {
-            if let Some(ref endpoint) = iroh_endpoint {
-                let s2s_state = Arc::clone(&state);
-                match crate::s2s::start(s2s_state, endpoint.clone()).await {
-                    Ok((manager, mut s2s_rx)) => {
-                        // Store manager in shared state so iroh accept loop can route S2S
-                        *state.s2s_manager.lock().unwrap() = Some(Arc::clone(&manager));
+        // Start S2S manager whenever iroh is enabled (not just when peers are configured).
+        // This allows the server to accept incoming S2S connections from other servers.
+        if let Some(ref endpoint) = iroh_endpoint {
+            let s2s_state = Arc::clone(&state);
+            match crate::s2s::start(s2s_state, endpoint.clone()).await {
+                Ok((manager, mut s2s_rx)) => {
+                    // Store manager in shared state so iroh accept loop can route S2S
+                    *state.s2s_manager.lock().unwrap() = Some(Arc::clone(&manager));
 
-                        // Connect to configured peers
-                        for peer_id in &self.config.s2s_peers {
-                            let event_tx = manager.event_tx.clone();
-                            if let Err(e) = crate::s2s::connect_peer(
-                                endpoint, peer_id, &manager, event_tx,
-                            ).await {
-                                tracing::error!("Failed to connect to S2S peer {peer_id}: {e}");
-                            }
+                    // Connect to configured peers (if any)
+                    for peer_id in &self.config.s2s_peers {
+                        let event_tx = manager.event_tx.clone();
+                        if let Err(e) = crate::s2s::connect_peer(
+                            endpoint, peer_id, &manager, event_tx,
+                        ).await {
+                            tracing::error!("Failed to connect to S2S peer {peer_id}: {e}");
                         }
+                    }
 
-                        // Spawn S2S event processor
-                        let s2s_state = Arc::clone(&state);
-                        let s2s_manager = Arc::clone(&manager);
-                        tokio::spawn(async move {
-                            while let Some(msg) = s2s_rx.recv().await {
-                                process_s2s_message(&s2s_state, &s2s_manager, msg).await;
-                            }
-                        });
+                    // Spawn S2S event processor
+                    let s2s_state = Arc::clone(&state);
+                    let s2s_manager = Arc::clone(&manager);
+                    tokio::spawn(async move {
+                        while let Some(msg) = s2s_rx.recv().await {
+                            process_s2s_message(&s2s_state, &s2s_manager, msg).await;
+                        }
+                    });
 
+                    if self.config.s2s_peers.is_empty() {
+                        tracing::info!("S2S ready (accepting incoming peer connections)");
+                    } else {
                         tracing::info!(
                             "S2S clustering active with {} peer(s)",
                             self.config.s2s_peers.len()
                         );
                     }
-                    Err(e) => {
-                        tracing::error!("Failed to start S2S: {e}");
-                    }
                 }
-            } else {
-                tracing::error!("S2S requires iroh transport (--iroh)");
+                Err(e) => {
+                    tracing::error!("Failed to start S2S: {e}");
+                }
             }
+        } else if !self.config.s2s_peers.is_empty() {
+            tracing::error!("S2S requires iroh transport (--iroh)");
         }
 
         // Keep iroh endpoint alive
