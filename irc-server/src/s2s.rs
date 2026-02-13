@@ -326,8 +326,8 @@ async fn handle_s2s_connection(
         let _ = send.finish();
     });
 
-    // Send sync request on new link
-    if !incoming {
+    // Both sides send sync request — each needs the other's state
+    {
         let sync_req = S2sMessage::SyncRequest;
         if let Some(tx) = peers.lock().await.get(&peer_id) {
             let _ = tx.send(sync_req).await;

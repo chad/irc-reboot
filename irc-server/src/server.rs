@@ -707,13 +707,11 @@ async fn process_s2s_message(
 
         S2sMessage::Topic { channel, topic, set_by, origin } => {
             if origin == manager.server_id { return; }
-            let channel_key = channel.to_lowercase();
-            // Update our topic state
+            // Create channel if needed, then set topic
             {
                 let mut channels = state.channels.lock().unwrap();
-                if let Some(ch) = channels.get_mut(&channel_key) {
-                    ch.topic = Some(TopicInfo::new(topic.clone(), set_by.clone()));
-                }
+                let ch = channels.entry(channel.clone()).or_default();
+                ch.topic = Some(TopicInfo::new(topic.clone(), set_by.clone()));
             }
             let line = format!(":{set_by}!remote@s2s TOPIC {channel} :{topic}\r\n");
             deliver_to_channel(state, &channel, &line);
@@ -755,6 +753,7 @@ async fn process_s2s_message(
             }
 
             // Re-op any local members whose DID now has persistent ops
+            let has_local_members = !ch.members.is_empty();
             let members: Vec<String> = ch.members.iter().cloned().collect();
             let dids = state.session_dids.lock().unwrap();
             for session_id in &members {
@@ -763,6 +762,13 @@ async fn process_s2s_message(
                         ch.ops.insert(session_id.clone());
                     }
                 }
+            }
+            drop(dids);
+            drop(channels);
+
+            // Notify local members of op changes
+            if has_local_members {
+                send_names_update(state, &channel);
             }
         }
 
@@ -800,49 +806,83 @@ async fn process_s2s_message(
                 "Received sync: {} channel(s) from peer {peer_id}",
                 remote_channels.len()
             );
-            let mut channels = state.channels.lock().unwrap();
-            for info in remote_channels {
-                let ch = channels.entry(info.name.clone()).or_default();
+            let mut updated_channels = Vec::new();
+            {
+                let mut channels = state.channels.lock().unwrap();
+                for info in remote_channels {
+                    let ch = channels.entry(info.name.clone()).or_default();
 
-                // Merge founder: first-write-wins (no timestamp comparison)
-                if ch.founder_did.is_none() && info.founder_did.is_some() {
-                    ch.founder_did = info.founder_did.clone();
-                }
-
-                // Merge DID ops (union)
-                for did in &info.did_ops {
-                    ch.did_ops.insert(did.clone());
-                }
-
-                // Add remote nicks
-                for nick in &info.nicks {
-                    ch.remote_members.insert(nick.clone(), peer_id.clone());
-                }
-
-                // Merge topic if we don't have one
-                if ch.topic.is_none() {
-                    if let Some(ref topic) = info.topic {
-                        ch.topic = Some(TopicInfo::new(
-                            topic.clone(),
-                            info.founder_did.as_deref().unwrap_or("unknown").to_string(),
-                        ));
+                    // Merge founder: first-write-wins (no timestamp comparison)
+                    if ch.founder_did.is_none() && info.founder_did.is_some() {
+                        ch.founder_did = info.founder_did.clone();
                     }
-                }
 
-                tracing::info!(
-                    "  Channel {}: {} remote user(s), founder: {:?}, {} DID ops",
-                    info.name, info.nicks.len(), ch.founder_did, ch.did_ops.len()
-                );
+                    // Merge DID ops (union)
+                    for did in &info.did_ops {
+                        ch.did_ops.insert(did.clone());
+                    }
+
+                    // Add remote nicks
+                    let had_remote = !ch.remote_members.is_empty();
+                    for nick in &info.nicks {
+                        ch.remote_members.insert(nick.clone(), peer_id.clone());
+                    }
+
+                    // Merge topic if we don't have one
+                    if ch.topic.is_none() {
+                        if let Some(ref topic) = info.topic {
+                            ch.topic = Some(TopicInfo::new(
+                                topic.clone(),
+                                info.founder_did.as_deref().unwrap_or("unknown").to_string(),
+                            ));
+                        }
+                    }
+
+                    // Re-op any local members whose DID now has persistent ops
+                    let dids = state.session_dids.lock().unwrap();
+                    let members: Vec<String> = ch.members.iter().cloned().collect();
+                    for session_id in &members {
+                        if let Some(did) = dids.get(session_id) {
+                            if ch.founder_did.as_deref() == Some(did) || ch.did_ops.contains(did) {
+                                ch.ops.insert(session_id.clone());
+                            }
+                        }
+                    }
+
+                    // Track channels that have local members (need NAMES refresh)
+                    if !ch.members.is_empty() {
+                        updated_channels.push(info.name.clone());
+                    }
+
+                    tracing::info!(
+                        "  Channel {}: {} remote user(s), founder: {:?}, {} DID ops, topic: {:?}",
+                        info.name, ch.remote_members.len(), ch.founder_did, ch.did_ops.len(),
+                        ch.topic.as_ref().map(|t| &t.text),
+                    );
+                }
             }
 
-            // Re-op any local members whose DID now has persistent ops
-            let dids = state.session_dids.lock().unwrap();
-            for ch in channels.values_mut() {
-                let members: Vec<String> = ch.members.iter().cloned().collect();
-                for session_id in &members {
-                    if let Some(did) = dids.get(session_id) {
-                        if ch.founder_did.as_deref() == Some(did) || ch.did_ops.contains(did) {
-                            ch.ops.insert(session_id.clone());
+            // Send NAMES + topic updates to local members of affected channels
+            for channel in &updated_channels {
+                send_names_update(state, channel);
+                // Also push topic to local members
+                let topic_info = state.channels.lock().unwrap()
+                    .get(channel)
+                    .and_then(|ch| ch.topic.as_ref().map(|t| (t.text.clone(), t.set_by.clone())));
+                if let Some((topic, set_by)) = topic_info {
+                    let line = format!(
+                        ":{} 332 * {} :{}\r\n",
+                        state.server_name, channel, topic,
+                    );
+                    // Send to all local members
+                    let members: Vec<String> = state.channels.lock().unwrap()
+                        .get(channel)
+                        .map(|ch| ch.members.iter().cloned().collect())
+                        .unwrap_or_default();
+                    let conns = state.connections.lock().unwrap();
+                    for session_id in &members {
+                        if let Some(tx) = conns.get(session_id) {
+                            let _ = tx.try_send(line.clone());
                         }
                     }
                 }
