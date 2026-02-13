@@ -1853,3 +1853,441 @@ async fn s2s_message_during_partial_channel() {
     let _ = ha.quit(Some("done")).await;
     let _ = hb.quit(Some("done")).await;
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// S2S Sync Invariant Tests
+//
+// These test the fundamental invariants that MUST hold for federated
+// channel state to be consistent. Each test name describes the
+// invariant being verified.
+//
+// Invariant list:
+//   INV-1: Exactly one op when channel created across federation
+//   INV-2: Second joiner on remote server is NOT op
+//   INV-3: Channel creator is op on both servers' NAMES
+//   INV-4: +t enforced across servers (remote can't change topic)
+//   INV-5: +n enforced across servers (non-member can't send)
+//   INV-6: +m enforced across servers (non-voiced can't send)
+//   INV-7: Mode changes propagate to remote server
+//   INV-8: Staggered join — third joiner is NOT op
+//   INV-9: Quit properly cleans up op state
+// ═══════════════════════════════════════════════════════════════════
+
+/// Helper: request NAMES for a channel and return the nick list.
+async fn request_names(
+    handle: &ClientHandle,
+    rx: &mut mpsc::Receiver<Event>,
+    channel: &str,
+) -> Vec<String> {
+    drain(rx).await;
+    handle.raw(&format!("NAMES {channel}")).await.unwrap();
+    let ch = channel.to_lowercase();
+    match wait_for_timeout(
+        rx,
+        |e| matches!(e, Event::Names { channel: c, .. } if c.to_lowercase() == ch),
+        &format!("NAMES response for {channel}"),
+        TIMEOUT,
+    ).await {
+        Event::Names { nicks, .. } => nicks,
+        _ => unreachable!(),
+    }
+}
+
+/// Helper: check if a nick has op (@) prefix in a NAMES list.
+fn nick_is_op(nicks: &[String], nick: &str) -> bool {
+    nicks.iter().any(|n| n == &format!("@{nick}"))
+}
+
+/// Helper: check if a nick is present (with or without prefix) in a NAMES list.
+fn nick_is_present(nicks: &[String], nick: &str) -> bool {
+    nicks.iter().any(|n| n.trim_start_matches(&['@', '+'][..]) == nick)
+}
+
+/// Helper: count how many nicks have op prefix.
+fn count_ops(nicks: &[String]) -> usize {
+    nicks.iter().filter(|n| n.starts_with('@')).count()
+}
+
+// ── INV-1: Exactly one op when channel first created ──
+
+#[tokio::test]
+async fn single_server_inv1_one_op_on_create() {
+    let Some(server) = get_single_server() else { return };
+    let channel = test_channel("inv1");
+    let nick_a = test_nick("inv1", "a");
+    let nick_b = test_nick("inv1", "b");
+
+    // A creates channel
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    let nicks = request_names(&ha, &mut ea, &channel).await;
+    assert!(nick_is_op(&nicks, &nick_a), "Creator should be op: {nicks:?}");
+    assert_eq!(count_ops(&nicks), 1, "Exactly one op on create: {nicks:?}");
+
+    // B joins same channel — should NOT get op
+    let (hb, mut eb) = connect_guest(&server, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    let nicks = request_names(&ha, &mut ea, &channel).await;
+    assert!(nick_is_op(&nicks, &nick_a), "Creator still op: {nicks:?}");
+    assert!(!nick_is_op(&nicks, &nick_b), "Second joiner NOT op: {nicks:?}");
+    assert_eq!(count_ops(&nicks), 1, "Still exactly one op: {nicks:?}");
+    eprintln!("  ✓ INV-1: Exactly one op on channel creation (single server)");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── INV-2: Second joiner on remote server is NOT op ──
+
+#[tokio::test]
+async fn s2s_inv2_remote_joiner_not_op() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("inv2");
+    let nick_a = test_nick("inv2", "a");
+    let nick_b = test_nick("inv2", "b");
+
+    // A creates channel on local server
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    // Wait for S2S to propagate the channel creation
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // B joins on remote server — should NOT be op
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // Check from B's perspective
+    let nicks_b = request_names(&hb, &mut eb, &channel).await;
+    assert!(nick_is_present(&nicks_b, &nick_a), "A visible on remote: {nicks_b:?}");
+    assert!(!nick_is_op(&nicks_b, &nick_b), "B should NOT be op on remote: {nicks_b:?}");
+    eprintln!("  Remote NAMES: {nicks_b:?}");
+
+    // Check from A's perspective
+    let nicks_a = request_names(&ha, &mut ea, &channel).await;
+    assert!(nick_is_op(&nicks_a, &nick_a), "A should be op on local: {nicks_a:?}");
+    assert!(!nick_is_op(&nicks_a, &nick_b), "B should NOT be op on local: {nicks_a:?}");
+    eprintln!("  Local NAMES: {nicks_a:?}");
+
+    // Count total ops across both views — should be exactly 1
+    let total_ops_local = count_ops(&nicks_a);
+    let total_ops_remote = count_ops(&nicks_b);
+    assert_eq!(total_ops_local, 1, "Exactly 1 op on local: {nicks_a:?}");
+    // Remote might show A as op or not depending on is_op propagation
+    assert!(total_ops_remote <= 1, "At most 1 op on remote: {nicks_b:?}");
+
+    eprintln!("  ✓ INV-2: Remote joiner is NOT op");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── INV-3: Creator shows as op on both servers ──
+
+#[tokio::test]
+async fn s2s_inv3_creator_is_op_everywhere() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("inv3");
+    let nick_a = test_nick("inv3", "a");
+    let nick_b = test_nick("inv3", "b");
+
+    // A creates channel on local
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // B joins on remote
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // A should be op on local
+    let nicks_a = request_names(&ha, &mut ea, &channel).await;
+    assert!(nick_is_op(&nicks_a, &nick_a), "Creator is op on local: {nicks_a:?}");
+
+    // A should be op on remote too (via is_op in S2S Join)
+    let nicks_b = request_names(&hb, &mut eb, &channel).await;
+    assert!(nick_is_op(&nicks_b, &nick_a), "Creator is op on remote: {nicks_b:?}");
+    eprintln!("  ✓ INV-3: Creator shows as @op on both servers");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── INV-4: +t enforced across servers ──
+
+#[tokio::test]
+async fn s2s_inv4_topic_lock_enforced_cross_server() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("inv4");
+    let nick_a = test_nick("inv4", "a");
+    let nick_b = test_nick("inv4", "b");
+
+    // A creates channel on local, sets +t
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    ha.raw(&format!("TOPIC {channel} :original topic")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    ha.raw(&format!("MODE {channel} +t")).await.unwrap();
+    wait_mode(&mut ea, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // B joins on remote
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // B tries to set topic — should fail (B is not op, channel is +t)
+    hb.raw(&format!("TOPIC {channel} :hacked topic")).await.unwrap();
+
+    // B should get ERR_CHANOPRIVSNEEDED (482) or the topic should not change
+    // Wait a moment, then check the topic from A's perspective
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    ha.raw(&format!("TOPIC {channel}")).await.unwrap();
+    let got = wait_topic(&mut ea, &channel).await;
+    assert_eq!(got, "original topic",
+        "Topic should NOT have changed (B is not op, +t is set): got '{got}'");
+    eprintln!("  ✓ INV-4: +t prevents non-op from changing topic across servers");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── INV-5: +n enforced — non-member can't send ──
+
+#[tokio::test]
+async fn single_server_inv5_no_external_messages() {
+    let Some(server) = get_single_server() else { return };
+    let channel = test_channel("inv5");
+    let nick_a = test_nick("inv5", "a");
+    let nick_b = test_nick("inv5", "b");
+
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    ha.raw(&format!("MODE {channel} +n")).await.unwrap();
+    wait_mode(&mut ea, &channel).await;
+
+    // B connects but does NOT join
+    let (hb, mut eb) = connect_guest(&server, &nick_b).await;
+    wait_registered(&mut eb).await;
+
+    // B tries to send to channel — should get ERR_CANNOTSENDTOCHAN (404)
+    hb.raw(&format!("PRIVMSG {channel} :external message")).await.unwrap();
+
+    // A should NOT receive the message
+    let got = maybe_wait(
+        &mut ea,
+        |e| matches!(e, Event::Message { from, .. } if from == &nick_b),
+        Duration::from_secs(3),
+    ).await;
+    assert!(got.is_none(), "A should NOT receive external message with +n");
+    eprintln!("  ✓ INV-5: +n blocks external messages");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── INV-6: +m enforced — non-voiced can't send ──
+
+#[tokio::test]
+async fn single_server_inv6_moderated_channel() {
+    let Some(server) = get_single_server() else { return };
+    let channel = test_channel("inv6");
+    let nick_a = test_nick("inv6", "a");
+    let nick_b = test_nick("inv6", "b");
+
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    let (hb, mut eb) = connect_guest(&server, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    ha.raw(&format!("MODE {channel} +m")).await.unwrap();
+    wait_mode(&mut ea, &channel).await;
+
+    drain(&mut ea).await;
+
+    // B (not voiced) tries to send — should be blocked
+    hb.raw(&format!("PRIVMSG {channel} :silenced")).await.unwrap();
+
+    let got = maybe_wait(
+        &mut ea,
+        |e| matches!(e, Event::Message { from, .. } if from == &nick_b),
+        Duration::from_secs(3),
+    ).await;
+    assert!(got.is_none(), "A should NOT receive message from unvoiced user with +m");
+
+    // Voice B, then B should be able to send
+    ha.raw(&format!("MODE {channel} +v {nick_b}")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    hb.raw(&format!("PRIVMSG {channel} :now I can speak")).await.unwrap();
+    let (from, text) = wait_message_from(&mut ea, &nick_b).await;
+    assert_eq!(text, "now I can speak");
+    eprintln!("  ✓ INV-6: +m blocks unvoiced, allows voiced (from={from})");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── INV-7: Mode changes propagate to remote ──
+
+#[tokio::test]
+async fn s2s_inv7_mode_propagates() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("inv7");
+    let nick_a = test_nick("inv7", "a");
+    let nick_b = test_nick("inv7", "b");
+
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+    drain(&mut eb).await;
+
+    // A sets +t on local
+    ha.raw(&format!("MODE {channel} +t")).await.unwrap();
+    wait_mode(&mut ea, &channel).await;
+
+    // B should see the mode change
+    let (mode, _arg) = wait_mode(&mut eb, &channel).await;
+    assert!(mode.contains('t'), "Remote should see +t: {mode}");
+    eprintln!("  ✓ INV-7: Mode +t propagated to remote server");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── INV-8: Third joiner is never auto-opped ──
+
+#[tokio::test]
+async fn s2s_inv8_third_joiner_no_ops() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("inv8");
+    let nick_a = test_nick("inv8", "a");
+    let nick_b = test_nick("inv8", "b");
+    let nick_c = test_nick("inv8", "c");
+
+    // A creates on local
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // B joins on remote
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // C joins on local
+    let (hc, mut ec) = connect_guest(&local, &nick_c).await;
+    wait_registered(&mut ec).await;
+    hc.join(&channel).await.unwrap();
+    wait_joined(&mut ec, &channel).await;
+
+    let nicks = request_names(&hc, &mut ec, &channel).await;
+    assert!(nick_is_op(&nicks, &nick_a), "A should be op: {nicks:?}");
+    assert!(!nick_is_op(&nicks, &nick_b), "B should NOT be op: {nicks:?}");
+    assert!(!nick_is_op(&nicks, &nick_c), "C should NOT be op: {nicks:?}");
+    assert_eq!(count_ops(&nicks), 1, "Exactly 1 op total: {nicks:?}");
+    eprintln!("  ✓ INV-8: Third joiner is not op: {nicks:?}");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+    let _ = hc.quit(Some("done")).await;
+}
+
+// ── INV-9: QUIT cleans up and op count stays correct ──
+
+#[tokio::test]
+async fn s2s_inv9_quit_cleans_op_state() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("inv9");
+    let nick_a = test_nick("inv9", "a");
+    let nick_b = test_nick("inv9", "b");
+    let nick_c = test_nick("inv9", "c");
+
+    // A creates on local
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // B joins on remote
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // A quits — the channel creator leaves
+    ha.quit(Some("leaving")).await.unwrap();
+    drop(ha);
+    drop(ea);
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // C joins on local — should NOT be auto-opped (B is still in channel as remote)
+    let (hc, mut ec) = connect_guest(&local, &nick_c).await;
+    wait_registered(&mut ec).await;
+    hc.join(&channel).await.unwrap();
+    wait_joined(&mut ec, &channel).await;
+
+    let nicks = request_names(&hc, &mut ec, &channel).await;
+    assert!(!nick_is_op(&nicks, &nick_c), "C should NOT be op (B is still remote member): {nicks:?}");
+    eprintln!("  ✓ INV-9: After creator quit, new joiner not auto-opped: {nicks:?}");
+
+    let _ = hb.quit(Some("done")).await;
+    let _ = hc.quit(Some("done")).await;
+}
