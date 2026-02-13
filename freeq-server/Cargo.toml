@@ -37,6 +37,7 @@ sha2 = { workspace = true }
 percent-encoding = { workspace = true }
 iroh-quinn = { workspace = true }
 automerge = { workspace = true }
+toml = "0.8"
 
 [dev-dependencies]
 freeq-sdk = { path = "../freeq-sdk" }

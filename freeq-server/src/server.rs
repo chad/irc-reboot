@@ -16,6 +16,7 @@ use tokio_rustls::TlsAcceptor;
 use crate::config::ServerConfig;
 use crate::connection;
 use crate::db::Db;
+use crate::plugin::PluginManager;
 use crate::sasl::ChallengeStore;
 
 /// State for a single channel.
@@ -248,6 +249,8 @@ pub struct SharedState {
     pub db: Option<Mutex<Db>>,
     /// Server configuration (for MOTD, max messages, etc.).
     pub config: ServerConfig,
+    /// Plugin manager for server extensions.
+    pub plugin_manager: PluginManager,
 }
 
 impl SharedState {
@@ -411,6 +414,11 @@ impl Server {
             }
         }
 
+        let plugin_manager = PluginManager::load(
+            &self.config.plugins,
+            self.config.plugin_dir.as_deref(),
+        );
+
         Ok(Arc::new(SharedState {
             server_name: self.config.server_name.clone(),
             challenge_store: ChallengeStore::new(self.config.challenge_timeout_secs),
@@ -439,6 +447,7 @@ impl Server {
             cluster_doc: crate::crdt::ClusterDoc::new(&self.config.server_name),
             db: db.map(Mutex::new),
             config: self.config.clone(),
+            plugin_manager,
         }))
     }
 

@@ -76,6 +76,16 @@ pub struct ServerConfig {
     /// Typically points to the freeq-web/ directory.
     #[arg(long)]
     pub web_static_dir: Option<String>,
+
+    /// Plugins to load. Format: "name" or "name:key=val,key2=val2".
+    /// Can be specified multiple times.
+    #[arg(long = "plugin")]
+    pub plugins: Vec<String>,
+
+    /// Directory containing plugin config files (*.toml).
+    /// Each TOML file defines one plugin and its configuration.
+    #[arg(long)]
+    pub plugin_dir: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -97,6 +107,8 @@ impl Default for ServerConfig {
             max_messages_per_channel: 10000,
             motd: None,
             web_static_dir: None,
+            plugins: vec![],
+            plugin_dir: None,
         }
     }
 }

@@ -1,0 +1,16 @@
+# Identity override plugin for Kurt (TimeSync.bsky.social)
+#
+# When Kurt authenticates via AT Protocol, his WHOIS identity
+# shows "3|337" instead of his DID. Because Kurt wanted to be 3|337.
+#
+# Usage:
+#   freeq-server --plugin-dir ./examples/plugins/
+#
+# Or via CLI:
+#   freeq-server --plugin "identity-override:handle=timesync.bsky.social,display_id=3|337"
+
+name = "identity-override"
+
+[[rules]]
+handle = "timesync.bsky.social"
+display_id = "3|337"

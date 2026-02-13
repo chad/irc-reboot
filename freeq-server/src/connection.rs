@@ -849,20 +849,41 @@ async fn handle_authenticate(
                                 state.with_db(|db| db.save_identity(&did, &nick.to_lowercase()));
                             }
 
-                            // Resolve handle from DID document for WHOIS display
+                            // Resolve handle from DID document for WHOIS display,
+                            // then run plugins with the resolved handle.
                             {
                                 let did_clone = did.clone();
                                 let state_clone = Arc::clone(state);
                                 let sid = session_id.to_string();
+                                let nick_for_plugin = conn.nick.clone().unwrap_or_default();
                                 tokio::spawn(async move {
+                                    let mut resolved_handle: Option<String> = None;
                                     if let Ok(doc) = state_clone.did_resolver.resolve(&did_clone).await {
                                         for aka in &doc.also_known_as {
                                             if let Some(handle) = aka.strip_prefix("at://") {
+                                                resolved_handle = Some(handle.to_string());
                                                 state_clone.session_handles.lock().unwrap()
-                                                    .insert(sid, handle.to_string());
+                                                    .insert(sid.clone(), handle.to_string());
                                                 break;
                                             }
                                         }
+                                    }
+
+                                    // Run plugins after handle resolution
+                                    let auth_event = crate::plugin::AuthEvent {
+                                        did: did_clone.clone(),
+                                        handle: resolved_handle,
+                                        nick: nick_for_plugin,
+                                        session_id: sid.clone(),
+                                    };
+                                    let result = state_clone.plugin_manager.on_auth(&auth_event);
+                                    if let Some(override_did) = result.override_did {
+                                        state_clone.session_dids.lock().unwrap()
+                                            .insert(sid.clone(), override_did);
+                                    }
+                                    if let Some(override_handle) = result.override_handle {
+                                        state_clone.session_handles.lock().unwrap()
+                                            .insert(sid.clone(), override_handle);
                                     }
                                 });
                             }
