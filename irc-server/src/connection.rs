@@ -1035,10 +1035,19 @@ fn handle_join(
                 })
             })
             .collect();
-        // Remote members from S2S peers
-        for (nick, _origin) in &remote_members {
-            list.push(nick.clone());
+        // Remote members from S2S peers (with @ prefix if they have DID-based ops)
+        let channels_lock = state.channels.lock().unwrap();
+        let ch_state = channels_lock.get(channel);
+        for (nick, (_origin, did)) in &remote_members {
+            let is_op = did.as_ref().is_some_and(|d| {
+                ch_state.is_some_and(|ch| {
+                    ch.founder_did.as_deref() == Some(d.as_str()) || ch.did_ops.contains(d)
+                })
+            });
+            let prefix = if is_op { "@" } else { "" };
+            list.push(format!("{prefix}{nick}"));
         }
+        drop(channels_lock);
         list
     };
 
@@ -1771,18 +1780,58 @@ fn handle_whois(
         .cloned();
 
     let Some(target_session) = target_session else {
-        let reply = Message::from_server(
-            server_name,
-            irc::ERR_NOSUCHNICK,
-            vec![my_nick, target_nick, "No such nick"],
-        );
-        send(state, session_id, format!("{reply}\r\n"));
-        let end = Message::from_server(
-            server_name,
-            irc::RPL_ENDOFWHOIS,
-            vec![my_nick, target_nick, "End of /WHOIS list"],
-        );
-        send(state, session_id, format!("{end}\r\n"));
+        // Check if this is a remote user (from S2S)
+        let remote_info = {
+            let channels = state.channels.lock().unwrap();
+            channels.values()
+                .find_map(|ch| ch.remote_members.get(target_nick).cloned())
+        };
+
+        if let Some((origin, did)) = remote_info {
+            // Remote user — show what we know
+            let whoisuser = Message::from_server(
+                server_name,
+                irc::RPL_WHOISUSER,
+                vec![my_nick, target_nick, target_nick, "s2s", "*", &format!("Remote user via {}", &origin[..16.min(origin.len())])],
+            );
+            send(state, session_id, format!("{whoisuser}\r\n"));
+
+            let whoisserver = Message::from_server(
+                server_name,
+                irc::RPL_WHOISSERVER,
+                vec![my_nick, target_nick, "s2s", "Connected via S2S federation"],
+            );
+            send(state, session_id, format!("{whoisserver}\r\n"));
+
+            if let Some(ref d) = did {
+                let did_line = Message::from_server(
+                    server_name,
+                    irc::RPL_WHOISSPECIAL,
+                    vec![my_nick, target_nick, &format!("is authenticated as {d}")],
+                );
+                send(state, session_id, format!("{did_line}\r\n"));
+            }
+
+            let end = Message::from_server(
+                server_name,
+                irc::RPL_ENDOFWHOIS,
+                vec![my_nick, target_nick, "End of /WHOIS list"],
+            );
+            send(state, session_id, format!("{end}\r\n"));
+        } else {
+            let reply = Message::from_server(
+                server_name,
+                irc::ERR_NOSUCHNICK,
+                vec![my_nick, target_nick, "No such nick"],
+            );
+            send(state, session_id, format!("{reply}\r\n"));
+            let end = Message::from_server(
+                server_name,
+                irc::RPL_ENDOFWHOIS,
+                vec![my_nick, target_nick, "End of /WHOIS list"],
+            );
+            send(state, session_id, format!("{end}\r\n"));
+        }
         return;
     };
 

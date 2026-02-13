@@ -227,6 +227,7 @@ pub const ERR_UNKNOWNMODE: &str = "472";
 // WHOIS numerics
 pub const RPL_WHOISUSER: &str = "311";
 pub const RPL_WHOISSERVER: &str = "312";
+pub const RPL_WHOISSPECIAL: &str = "320";
 pub const RPL_WHOISACCOUNT: &str = "330";
 pub const RPL_ENDOFWHOIS: &str = "318";
 

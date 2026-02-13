@@ -23,8 +23,8 @@ use crate::sasl::ChallengeStore;
 pub struct ChannelState {
     /// Session IDs of local members currently in the channel.
     pub members: HashSet<String>,
-    /// Remote members from S2S peers: nick → origin server ID.
-    pub remote_members: HashMap<String, String>,
+    /// Remote members from S2S peers: nick → (origin server ID, optional DID).
+    pub remote_members: HashMap<String, (String, Option<String>)>,
     /// Session IDs of channel operators (ephemeral, per-session).
     pub ops: HashSet<String>,
     /// Session IDs of voiced users.
@@ -588,8 +588,12 @@ async fn process_s2s_message(
                 })
             })
             .collect();
-        for (nick, _) in &ch.remote_members {
-            nick_list.push(nick.clone());
+        for (nick, (_origin, did)) in &ch.remote_members {
+            let is_op = did.as_ref().is_some_and(|d| {
+                ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
+            });
+            let prefix = if is_op { "@" } else { "" };
+            nick_list.push(format!("{prefix}{nick}"));
         }
         let nick_str = nick_list.join(" ");
 
@@ -641,23 +645,11 @@ async fn process_s2s_message(
                 channels.entry(channel.clone()).or_default();
             }
 
-            // Track remote member
+            // Track remote member with their DID
             {
                 let mut channels = state.channels.lock().unwrap();
                 if let Some(ch) = channels.get_mut(&channel) {
-                    ch.remote_members.insert(nick.clone(), origin.clone());
-
-                    // If the remote user's DID has persistent ops, mark with @
-                    // (This info is used when building NAMES)
-                    if let Some(ref d) = did {
-                        if ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d) {
-                            // Remote user has DID-based ops — tracked for display
-                            tracing::debug!(
-                                nick = %nick, did = %d,
-                                "Remote user has DID-based ops in {channel}"
-                            );
-                        }
-                    }
+                    ch.remote_members.insert(nick.clone(), (origin.clone(), did.clone()));
                 }
             }
 
@@ -825,7 +817,8 @@ async fn process_s2s_message(
                     // Add remote nicks
                     let had_remote = !ch.remote_members.is_empty();
                     for nick in &info.nicks {
-                        ch.remote_members.insert(nick.clone(), peer_id.clone());
+                        // SyncResponse doesn't include per-user DIDs, just nicks
+                        ch.remote_members.insert(nick.clone(), (peer_id.clone(), None));
                     }
 
                     // Merge topic if we don't have one
