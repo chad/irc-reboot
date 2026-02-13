@@ -62,6 +62,8 @@ pub enum S2sMessage {
         channel: String,
         /// Authenticated DID (if any) — used for DID-based ops.
         did: Option<String>,
+        /// Resolved AT Protocol handle (e.g. "chadfowler.com").
+        handle: Option<String>,
         origin: String,
     },
 

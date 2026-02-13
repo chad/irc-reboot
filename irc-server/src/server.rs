@@ -23,8 +23,8 @@ use crate::sasl::ChallengeStore;
 pub struct ChannelState {
     /// Session IDs of local members currently in the channel.
     pub members: HashSet<String>,
-    /// Remote members from S2S peers: nick → (origin server ID, optional DID).
-    pub remote_members: HashMap<String, (String, Option<String>)>,
+    /// Remote members from S2S peers: nick → RemoteMember info.
+    pub remote_members: HashMap<String, RemoteMember>,
     /// Session IDs of channel operators (ephemeral, per-session).
     pub ops: HashSet<String>,
     /// Session IDs of voiced users.
@@ -58,6 +58,17 @@ pub struct ChannelState {
     pub topic_locked: bool,
     /// Channel key (+k) — password required to join.
     pub key: Option<String>,
+}
+
+/// Info about a remote user connected via S2S federation.
+#[derive(Debug, Clone, Default)]
+pub struct RemoteMember {
+    /// Iroh endpoint ID of the origin server.
+    pub origin: String,
+    /// Authenticated DID (if any).
+    pub did: Option<String>,
+    /// Resolved AT Protocol handle (e.g. "chadfowler.com").
+    pub handle: Option<String>,
 }
 
 /// A stored message for channel history replay.
@@ -588,8 +599,8 @@ async fn process_s2s_message(
                 })
             })
             .collect();
-        for (nick, (_origin, did)) in &ch.remote_members {
-            let is_op = did.as_ref().is_some_and(|d| {
+        for (nick, rm) in &ch.remote_members {
+            let is_op = rm.did.as_ref().is_some_and(|d| {
                 ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
             });
             let prefix = if is_op { "@" } else { "" };
@@ -636,7 +647,7 @@ async fn process_s2s_message(
             }
         }
 
-        S2sMessage::Join { nick, channel, did, origin } => {
+        S2sMessage::Join { nick, channel, did, handle, origin } => {
             if origin == manager.server_id { return; }
 
             // Ensure channel exists locally (create if needed, no ops granted)
@@ -645,11 +656,15 @@ async fn process_s2s_message(
                 channels.entry(channel.clone()).or_default();
             }
 
-            // Track remote member with their DID
+            // Track remote member with their identity info
             {
                 let mut channels = state.channels.lock().unwrap();
                 if let Some(ch) = channels.get_mut(&channel) {
-                    ch.remote_members.insert(nick.clone(), (origin.clone(), did.clone()));
+                    ch.remote_members.insert(nick.clone(), RemoteMember {
+                        origin: origin.clone(),
+                        did: did.clone(),
+                        handle: handle.clone(),
+                    });
                 }
             }
 
@@ -817,8 +832,12 @@ async fn process_s2s_message(
                     // Add remote nicks
                     let had_remote = !ch.remote_members.is_empty();
                     for nick in &info.nicks {
-                        // SyncResponse doesn't include per-user DIDs, just nicks
-                        ch.remote_members.insert(nick.clone(), (peer_id.clone(), None));
+                        // SyncResponse doesn't include per-user DIDs/handles yet
+                        ch.remote_members.entry(nick.clone()).or_insert_with(|| RemoteMember {
+                            origin: peer_id.clone(),
+                            did: None,
+                            handle: None,
+                        });
                     }
 
                     // Merge topic if we don't have one

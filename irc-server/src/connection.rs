@@ -945,10 +945,13 @@ fn handle_join(
 
     // Broadcast JOIN to S2S peers
     let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+    // Look up AT handle for the joining user
+    let handle = state.session_handles.lock().unwrap().get(session_id).cloned();
     s2s_broadcast(state, crate::s2s::S2sMessage::Join {
         nick: nick.to_string(),
         channel: channel.to_string(),
         did: did.map(|d| d.to_string()),
+        handle,
         origin: origin.clone(),
     });
 
@@ -1038,8 +1041,8 @@ fn handle_join(
         // Remote members from S2S peers (with @ prefix if they have DID-based ops)
         let channels_lock = state.channels.lock().unwrap();
         let ch_state = channels_lock.get(channel);
-        for (nick, (_origin, did)) in &remote_members {
-            let is_op = did.as_ref().is_some_and(|d| {
+        for (nick, rm) in &remote_members {
+            let is_op = rm.did.as_ref().is_some_and(|d| {
                 ch_state.is_some_and(|ch| {
                     ch.founder_did.as_deref() == Some(d.as_str()) || ch.did_ops.contains(d)
                 })
@@ -1781,35 +1784,73 @@ fn handle_whois(
 
     let Some(target_session) = target_session else {
         // Check if this is a remote user (from S2S)
-        let remote_info = {
+        let remote_info: Option<crate::server::RemoteMember> = {
             let channels = state.channels.lock().unwrap();
             channels.values()
                 .find_map(|ch| ch.remote_members.get(target_nick).cloned())
         };
 
-        if let Some((origin, did)) = remote_info {
+        if let Some(rm) = remote_info {
             // Remote user — show what we know
+            let realname = match (&rm.handle, &rm.did) {
+                (Some(h), _) => format!("{h} (via S2S federation)"),
+                (_, Some(d)) => format!("{d} (via S2S federation)"),
+                _ => "Remote user (via S2S federation)".to_string(),
+            };
             let whoisuser = Message::from_server(
                 server_name,
                 irc::RPL_WHOISUSER,
-                vec![my_nick, target_nick, target_nick, "s2s", "*", &format!("Remote user via {}", &origin[..16.min(origin.len())])],
+                vec![my_nick, target_nick, target_nick, "s2s", "*", &realname],
             );
             send(state, session_id, format!("{whoisuser}\r\n"));
 
             let whoisserver = Message::from_server(
                 server_name,
                 irc::RPL_WHOISSERVER,
-                vec![my_nick, target_nick, "s2s", "Connected via S2S federation"],
+                vec![my_nick, target_nick, "s2s", &format!("Connected via S2S ({}…)", &rm.origin[..16.min(rm.origin.len())])],
             );
             send(state, session_id, format!("{whoisserver}\r\n"));
 
-            if let Some(ref d) = did {
+            // Show AT Protocol handle
+            if let Some(ref handle) = rm.handle {
+                let handle_line = Message::from_server(
+                    server_name,
+                    "671",
+                    vec![my_nick, target_nick, &format!("AT Protocol handle: {handle}")],
+                );
+                send(state, session_id, format!("{handle_line}\r\n"));
+            }
+
+            // Show DID
+            if let Some(ref d) = rm.did {
                 let did_line = Message::from_server(
                     server_name,
-                    irc::RPL_WHOISSPECIAL,
-                    vec![my_nick, target_nick, &format!("is authenticated as {d}")],
+                    irc::RPL_WHOISACCOUNT,
+                    vec![my_nick, target_nick, d, "is authenticated as"],
                 );
                 send(state, session_id, format!("{did_line}\r\n"));
+            }
+
+            // Show channels they're in
+            let user_channels: Vec<String> = {
+                let channels = state.channels.lock().unwrap();
+                channels.iter()
+                    .filter(|(_, ch)| ch.remote_members.contains_key(target_nick))
+                    .map(|(name, ch)| {
+                        let is_op = rm.did.as_ref().is_some_and(|d| {
+                            ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
+                        });
+                        if is_op { format!("@{name}") } else { name.clone() }
+                    })
+                    .collect()
+            };
+            if !user_channels.is_empty() {
+                let channels_line = Message::from_server(
+                    server_name,
+                    "319",  // RPL_WHOISCHANNELS
+                    vec![my_nick, target_nick, &user_channels.join(" ")],
+                );
+                send(state, session_id, format!("{channels_line}\r\n"));
             }
 
             let end = Message::from_server(
