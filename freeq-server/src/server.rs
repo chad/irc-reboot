@@ -64,6 +64,29 @@ pub struct ChannelState {
     pub key: Option<String>,
 }
 
+/// Pending OAuth authorization: stored between /auth/login and /auth/callback.
+#[derive(Debug, Clone)]
+pub struct OAuthPending {
+    pub handle: String,
+    pub did: String,
+    pub pds_url: String,
+    pub code_verifier: String,
+    pub redirect_uri: String,
+    pub client_id: String,
+    pub token_endpoint: String,
+    pub dpop_key_b64: String,
+    pub created_at: u64,
+}
+
+/// Completed OAuth: stored after /auth/callback, consumed by the web client.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OAuthResult {
+    pub did: String,
+    pub handle: String,
+    pub access_jwt: String,
+    pub pds_url: String,
+}
+
 /// Info about a remote user connected via S2S federation.
 #[derive(Debug, Clone, Default)]
 pub struct RemoteMember {
@@ -205,6 +228,10 @@ pub struct SharedState {
     pub cap_batch: Mutex<HashSet<String>>,
     pub cap_account_notify: Mutex<HashSet<String>>,
     pub cap_extended_join: Mutex<HashSet<String>>,
+    /// Pending OAuth sessions: state → OAuthPending.
+    pub oauth_pending: Mutex<HashMap<String, OAuthPending>>,
+    /// Completed OAuth sessions: state → OAuthResult.
+    pub oauth_complete: Mutex<HashMap<String, OAuthResult>>,
     /// session_id -> iroh endpoint ID (for connections via iroh transport).
     pub session_iroh_ids: Mutex<HashMap<String, String>>,
     /// session_id -> away message (None = not away).
@@ -323,6 +350,8 @@ impl Server {
             cap_batch: Mutex::new(HashSet::new()),
             cap_account_notify: Mutex::new(HashSet::new()),
             cap_extended_join: Mutex::new(HashSet::new()),
+            oauth_pending: Mutex::new(HashMap::new()),
+            oauth_complete: Mutex::new(HashMap::new()),
             session_iroh_ids: Mutex::new(HashMap::new()),
             session_away: Mutex::new(HashMap::new()),
             server_iroh_id: Mutex::new(None),

@@ -142,17 +142,18 @@
       </div>
     </div>
     <div class="section-label">AT Protocol Authentication (optional)</div>
-    <div class="field-row">
+    <div class="field">
+      <label>Handle or DID</label>
+      <input id="f-at-handle" placeholder="you.bsky.social">
+    </div>
+    <div id="auth-method-row" class="field-row" style="display:none">
       <div class="field">
-        <label>Handle or DID</label>
-        <input id="f-at-handle" placeholder="you.bsky.social">
-      </div>
-      <div class="field">
-        <label>App Password</label>
+        <label>App Password (leave blank for OAuth)</label>
         <input id="f-at-password" type="password" placeholder="xxxx-xxxx-xxxx-xxxx">
       </div>
     </div>
     <button onclick="doConnect()">Connect</button>
+    <button id="btn-oauth" onclick="doOAuthConnect()" style="display:none; background:var(--mauve); margin-top:4px">Login with Bluesky (OAuth)</button>
     <div id="connect-error"></div>
   </div>
 </div>
@@ -190,6 +191,7 @@ let ws = null, nick = '', registered = false;
 let atHandle = '', atPassword = '', atDid = '', atAccessJwt = '', atPdsUrl = '';
 let capNegotiating = false, wantedCaps = [], ackedCaps = new Set();
 let saslInProgress = false;
+let oauthPopup = null;
 const buffers = {};
 let activeBuffer = 'server';
 let inputHistory = [], historyPos = -1;
@@ -214,8 +216,8 @@ async function doConnect() {
   if (!url) { showErr('Enter a WebSocket URL'); return; }
   showErr('Connecting…');
 
-  // If AT auth requested, resolve handle and create session first
-  if (atHandle && atPassword) {
+  // If AT auth via app password (not OAuth), resolve identity now
+  if (atHandle && atPassword && !atAccessJwt) {
     try {
       await resolveAtIdentity();
     } catch (e) {
@@ -268,6 +270,33 @@ function doDisconnect() {
 }
 
 function showErr(t) { document.getElementById('connect-error').textContent = t; }
+
+// ── OAuth popup flow ─────────────────────────────────────────────
+
+function doOAuthConnect() {
+  atHandle = document.getElementById('f-at-handle').value.trim();
+  if (!atHandle) { showErr('Enter your Bluesky handle first'); return; }
+
+  showErr('Opening Bluesky login…');
+  const serverUrl = document.getElementById('f-server').value.trim().replace(/^ws/, 'http').replace(/\/irc$/, '');
+  const authUrl = serverUrl + '/auth/login?handle=' + encodeURIComponent(atHandle);
+  oauthPopup = window.open(authUrl, 'freeq-auth', 'width=500,height=600');
+}
+
+// Listen for OAuth result from popup
+window.addEventListener('message', (e) => {
+  if (e.data && e.data.type === 'freeq-oauth' && e.data.result) {
+    const r = e.data.result;
+    atDid = r.did;
+    atAccessJwt = r.access_jwt;
+    atPdsUrl = r.pds_url;
+    atHandle = r.handle || atHandle;
+    showErr('OAuth successful! Connecting…');
+    if (oauthPopup) { oauthPopup.close(); oauthPopup = null; }
+    // Now connect with the OAuth token
+    doConnect();
+  }
+});
 
 // ── AT Protocol Identity ─────────────────────────────────────────
 
@@ -832,6 +861,14 @@ function toggleNicklist() { document.getElementById('nicklist').classList.toggle
   const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
   document.getElementById('f-server').value = proto + '//' + loc.host + '/irc';
   document.getElementById('f-nick').value = 'web' + Math.floor(Math.random() * 99999);
+
+  // Show/hide OAuth button and app password field when handle is entered
+  const handleInput = document.getElementById('f-at-handle');
+  handleInput.addEventListener('input', () => {
+    const hasHandle = handleInput.value.trim().length > 0;
+    document.getElementById('auth-method-row').style.display = hasHandle ? '' : 'none';
+    document.getElementById('btn-oauth').style.display = hasHandle ? '' : 'none';
+  });
 })();
 </script>
 </body>

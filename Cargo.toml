@@ -33,6 +33,7 @@ rustls-pemfile = "2"
 webpki-roots = "1"
 p256 = { version = "0.13", features = ["ecdsa"] }
 sha2 = "0.10"
+percent-encoding = "2"
 open = "5"
 dirs = "5"
 rusqlite = { version = "0.38", features = ["bundled"] }

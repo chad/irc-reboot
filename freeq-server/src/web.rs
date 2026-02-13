@@ -15,7 +15,7 @@ use std::time::SystemTime;
 use axum::extract::ws::{Message as WsMessage, WebSocket};
 use axum::extract::{Path, Query, State, WebSocketUpgrade};
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Json};
+use axum::response::{Html, IntoResponse, Json, Redirect};
 use axum::routing::get;
 use axum::Router;
 use serde::{Deserialize, Serialize};
@@ -172,6 +172,9 @@ pub fn router(state: Arc<SharedState>) -> Router {
     let mut app = Router::new()
         // WebSocket IRC transport
         .route("/irc", get(ws_upgrade))
+        // OAuth endpoints for web client
+        .route("/auth/login", get(auth_login))
+        .route("/auth/callback", get(auth_callback))
         // REST API (read-only, v1)
         .route("/api/v1/health", get(api_health))
         .route("/api/v1/channels", get(api_channels))
@@ -471,4 +474,285 @@ async fn api_user_whois(
         handle,
         channels,
     }))
+}
+
+// ── OAuth endpoints for web client ─────────────────────────────────────
+
+#[derive(Deserialize)]
+struct AuthLoginQuery {
+    handle: String,
+}
+
+/// GET /auth/login?handle=user.bsky.social
+///
+/// Initiates the AT Protocol OAuth flow. Resolves the handle, does PAR,
+/// and redirects the browser to the authorization server.
+async fn auth_login(
+    Query(q): Query<AuthLoginQuery>,
+    State(state): State<Arc<SharedState>>,
+) -> Result<Redirect, (StatusCode, String)> {
+    let handle = q.handle.trim().to_string();
+
+    // Resolve handle → DID → PDS
+    let resolver = freeq_sdk::did::DidResolver::http();
+    let did = resolver.resolve_handle(&handle).await
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Cannot resolve handle: {e}")))?;
+    let did_doc = resolver.resolve(&did).await
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Cannot resolve DID: {e}")))?;
+    let pds_url = freeq_sdk::pds::pds_endpoint(&did_doc)
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "No PDS in DID document".to_string()))?;
+
+    // Discover authorization server
+    let client = reqwest::Client::new();
+    let pr_url = format!("{}/.well-known/oauth-protected-resource", pds_url.trim_end_matches('/'));
+    let pr_meta: serde_json::Value = client.get(&pr_url).send().await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("PDS metadata fetch failed: {e}")))?
+        .json().await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("PDS metadata parse failed: {e}")))?;
+
+    let auth_server = pr_meta["authorization_servers"][0].as_str()
+        .ok_or_else(|| (StatusCode::BAD_GATEWAY, "No authorization server".to_string()))?;
+
+    let as_url = format!("{}/.well-known/oauth-authorization-server", auth_server.trim_end_matches('/'));
+    let auth_meta: serde_json::Value = client.get(&as_url).send().await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Auth server metadata failed: {e}")))?
+        .json().await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Auth server metadata parse failed: {e}")))?;
+
+    let authorization_endpoint = auth_meta["authorization_endpoint"].as_str()
+        .ok_or_else(|| (StatusCode::BAD_GATEWAY, "No authorization_endpoint".to_string()))?;
+    let token_endpoint = auth_meta["token_endpoint"].as_str()
+        .ok_or_else(|| (StatusCode::BAD_GATEWAY, "No token_endpoint".to_string()))?;
+    let par_endpoint = auth_meta["pushed_authorization_request_endpoint"].as_str()
+        .ok_or_else(|| (StatusCode::BAD_GATEWAY, "No PAR endpoint".to_string()))?;
+
+    // Build redirect URI and client_id
+    // We use the server's own web address as the callback
+    let web_origin = format!("http://{}", state.config.web_addr.as_deref().unwrap_or("localhost:8080"));
+    let redirect_uri = format!("{web_origin}/auth/callback");
+    let scope = "atproto transition:generic";
+    let client_id = format!(
+        "http://localhost?redirect_uri={}&scope={}",
+        urlencod(&redirect_uri), urlencod(scope),
+    );
+
+    // Generate PKCE + DPoP key + state
+    let dpop_key = freeq_sdk::oauth::DpopKey::generate();
+    let (code_verifier, code_challenge) = generate_pkce();
+    let oauth_state = generate_random_string(16);
+
+    // PAR request
+    let params = [
+        ("response_type", "code"),
+        ("client_id", &client_id),
+        ("redirect_uri", &redirect_uri),
+        ("code_challenge", &code_challenge),
+        ("code_challenge_method", "S256"),
+        ("scope", scope),
+        ("state", &oauth_state),
+        ("login_hint", &handle),
+    ];
+
+    // Try without nonce first
+    let dpop_proof = dpop_key.proof("POST", par_endpoint, None, None)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DPoP proof failed: {e}")))?;
+    let resp = client.post(par_endpoint).header("DPoP", &dpop_proof).form(&params).send().await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("PAR failed: {e}")))?;
+
+    let status = resp.status();
+    let dpop_nonce = resp.headers().get("dpop-nonce")
+        .and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+
+    let par_resp: serde_json::Value = if status.as_u16() == 400 && dpop_nonce.is_some() {
+        // Retry with nonce
+        let nonce = dpop_nonce.as_deref().unwrap();
+        let dpop_proof2 = dpop_key.proof("POST", par_endpoint, Some(nonce), None)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DPoP retry failed: {e}")))?;
+        let resp2 = client.post(par_endpoint).header("DPoP", &dpop_proof2).form(&params).send().await
+            .map_err(|e| (StatusCode::BAD_GATEWAY, format!("PAR retry failed: {e}")))?;
+        if !resp2.status().is_success() {
+            let text = resp2.text().await.unwrap_or_default();
+            return Err((StatusCode::BAD_GATEWAY, format!("PAR failed: {text}")));
+        }
+        resp2.json().await.map_err(|e| (StatusCode::BAD_GATEWAY, format!("PAR parse failed: {e}")))?
+    } else if status.is_success() {
+        resp.json().await.map_err(|e| (StatusCode::BAD_GATEWAY, format!("PAR parse failed: {e}")))?
+    } else {
+        let text = resp.text().await.unwrap_or_default();
+        return Err((StatusCode::BAD_GATEWAY, format!("PAR failed ({status}): {text}")));
+    };
+
+    let request_uri = par_resp["request_uri"].as_str()
+        .ok_or_else(|| (StatusCode::BAD_GATEWAY, "No request_uri in PAR response".to_string()))?;
+
+    // Store pending session
+    let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+    state.oauth_pending.lock().unwrap().insert(oauth_state.clone(), crate::server::OAuthPending {
+        handle: handle.clone(),
+        did: did.clone(),
+        pds_url: pds_url.clone(),
+        code_verifier,
+        redirect_uri: redirect_uri.clone(),
+        client_id: client_id.clone(),
+        token_endpoint: token_endpoint.to_string(),
+        dpop_key_b64: dpop_key.to_base64url(),
+        created_at: now,
+    });
+
+    // Redirect to authorization server
+    let auth_url = format!(
+        "{}?client_id={}&request_uri={}",
+        authorization_endpoint, urlencod(&client_id), urlencod(request_uri),
+    );
+
+    tracing::info!(handle = %handle, did = %did, "OAuth login started, redirecting to auth server");
+    Ok(Redirect::temporary(&auth_url))
+}
+
+#[derive(Deserialize)]
+struct AuthCallbackQuery {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+    error_description: Option<String>,
+}
+
+/// GET /auth/callback?code=...&state=...
+///
+/// OAuth callback from the authorization server. Exchanges the code for
+/// tokens and returns an HTML page that posts the result to the parent window.
+async fn auth_callback(
+    Query(q): Query<AuthCallbackQuery>,
+    State(state): State<Arc<SharedState>>,
+) -> Result<Html<String>, (StatusCode, String)> {
+    // Check for error
+    if let Some(error) = &q.error {
+        let desc = q.error_description.as_deref().unwrap_or("Unknown error");
+        return Ok(Html(oauth_result_page(&format!("Error: {error}: {desc}"), None)));
+    }
+
+    let code = q.code.as_deref()
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "Missing code".to_string()))?;
+    let oauth_state = q.state.as_deref()
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "Missing state".to_string()))?;
+
+    // Look up pending session
+    let pending = state.oauth_pending.lock().unwrap().remove(oauth_state)
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "Unknown or expired OAuth state".to_string()))?;
+
+    // Check expiry (5 minutes)
+    let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+    if now - pending.created_at > 300 {
+        return Err((StatusCode::BAD_REQUEST, "OAuth session expired".to_string()));
+    }
+
+    // Exchange code for token
+    let dpop_key = freeq_sdk::oauth::DpopKey::from_base64url(&pending.dpop_key_b64)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DPoP key error: {e}")))?;
+
+    let client = reqwest::Client::new();
+    let params = [
+        ("grant_type", "authorization_code"),
+        ("code", code),
+        ("redirect_uri", pending.redirect_uri.as_str()),
+        ("client_id", pending.client_id.as_str()),
+        ("code_verifier", pending.code_verifier.as_str()),
+    ];
+
+    // Try without nonce
+    let dpop_proof = dpop_key.proof("POST", &pending.token_endpoint, None, None)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DPoP proof failed: {e}")))?;
+    let resp = client.post(&pending.token_endpoint).header("DPoP", &dpop_proof).form(&params).send().await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token exchange failed: {e}")))?;
+
+    let status = resp.status();
+    let dpop_nonce = resp.headers().get("dpop-nonce")
+        .and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+
+    let token_resp: serde_json::Value = if (status.as_u16() == 400 || status.as_u16() == 401) && dpop_nonce.is_some() {
+        let nonce = dpop_nonce.as_deref().unwrap();
+        let dpop_proof2 = dpop_key.proof("POST", &pending.token_endpoint, Some(nonce), None)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DPoP retry failed: {e}")))?;
+        let resp2 = client.post(&pending.token_endpoint).header("DPoP", &dpop_proof2).form(&params).send().await
+            .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token retry failed: {e}")))?;
+        if !resp2.status().is_success() {
+            let text = resp2.text().await.unwrap_or_default();
+            return Ok(Html(oauth_result_page(&format!("Token exchange failed: {text}"), None)));
+        }
+        resp2.json().await.map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token parse failed: {e}")))?
+    } else if status.is_success() {
+        resp.json().await.map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token parse failed: {e}")))?
+    } else {
+        let text = resp.text().await.unwrap_or_default();
+        return Ok(Html(oauth_result_page(&format!("Token exchange failed ({status}): {text}"), None)));
+    };
+
+    let access_token = token_resp["access_token"].as_str()
+        .ok_or_else(|| (StatusCode::BAD_GATEWAY, "No access_token".to_string()))?;
+
+    let result = crate::server::OAuthResult {
+        did: pending.did.clone(),
+        handle: pending.handle.clone(),
+        access_jwt: access_token.to_string(),
+        pds_url: pending.pds_url.clone(),
+    };
+
+    tracing::info!(did = %pending.did, handle = %pending.handle, "OAuth callback: token obtained");
+
+    // Return HTML page that posts result to parent window
+    Ok(Html(oauth_result_page("Authentication successful!", Some(&result))))
+}
+
+/// Generate the HTML page returned by the OAuth callback.
+/// If result is Some, it posts the credentials to the parent window via postMessage.
+fn oauth_result_page(message: &str, result: Option<&crate::server::OAuthResult>) -> String {
+    let script = if let Some(r) = result {
+        let json = serde_json::to_string(r).unwrap_or_default();
+        format!(
+            r#"<script>
+            if (window.opener) {{
+                window.opener.postMessage({{ type: 'freeq-oauth', result: {json} }}, '*');
+                setTimeout(() => window.close(), 2000);
+            }}
+            </script>"#
+        )
+    } else {
+        String::new()
+    };
+
+    format!(
+        r#"<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>freeq auth</title>
+<style>
+body {{ font-family: system-ui; background: #1e1e2e; color: #cdd6f4; display: flex; align-items: center; justify-content: center; height: 100vh; }}
+.box {{ text-align: center; }}
+h1 {{ color: #89b4fa; font-size: 20px; }}
+p {{ color: #a6adc8; }}
+</style></head>
+<body><div class="box"><h1>freeq</h1><p>{message}</p><p style="color:#6c7086">You can close this window.</p></div>
+{script}
+</body></html>"#
+    )
+}
+
+fn generate_pkce() -> (String, String) {
+    use base64::Engine;
+    use sha2::{Sha256, Digest};
+    let verifier = generate_random_string(32);
+    let hash = Sha256::digest(verifier.as_bytes());
+    let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash);
+    (verifier, challenge)
+}
+
+fn generate_random_string(len: usize) -> String {
+    use base64::Engine;
+    use rand::RngCore;
+    let mut bytes = vec![0u8; len];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes)
+}
+
+fn urlencod(s: &str) -> String {
+    use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+    utf8_percent_encode(s, NON_ALPHANUMERIC).to_string()
 }

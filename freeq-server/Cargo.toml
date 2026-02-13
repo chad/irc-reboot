@@ -33,6 +33,8 @@ rusqlite = { workspace = true }
 axum = { workspace = true }
 tower-http = { workspace = true }
 iroh = { workspace = true }
+sha2 = { workspace = true }
+percent-encoding = { workspace = true }
 iroh-quinn = { workspace = true }
 automerge = { workspace = true }
 
