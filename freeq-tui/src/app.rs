@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::editor::{LineEditor, Mode};
 
@@ -158,6 +159,12 @@ pub struct App {
     pub nick: String,
     /// Whether the app should quit.
     pub should_quit: bool,
+    /// Whether a reconnect attempt should be made.
+    pub reconnect_pending: bool,
+    /// When the next reconnect attempt should happen.
+    pub reconnect_at: Option<std::time::Instant>,
+    /// Current reconnect backoff delay.
+    pub reconnect_delay: Duration,
     /// Input history (most recent last).
     pub history: Vec<String>,
     /// Current position in history (None = not browsing).
@@ -218,6 +225,9 @@ impl App {
             debug_raw: false,
             nick: nick.to_string(),
             should_quit: false,
+            reconnect_pending: false,
+            reconnect_at: None,
+            reconnect_delay: Duration::from_secs(1),
             history: Vec::new(),
             history_pos: None,
             history_saved: String::new(),

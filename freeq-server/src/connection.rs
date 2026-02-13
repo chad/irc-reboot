@@ -46,6 +46,9 @@ pub struct Connection {
     cap_echo_message: bool,
     cap_server_time: bool,
     cap_batch: bool,
+    cap_chathistory: bool,
+    cap_account_notify: bool,
+    cap_extended_join: bool,
     /// Client understands E2EE messages (won't get synthetic notices instead).
     cap_e2ee: bool,
 
@@ -70,6 +73,9 @@ impl Connection {
             cap_echo_message: false,
             cap_server_time: false,
             cap_batch: false,
+            cap_chathistory: false,
+            cap_account_notify: false,
+            cap_extended_join: false,
             cap_e2ee: false,
             sasl_in_progress: false,
         }
@@ -595,6 +601,10 @@ where
                     send(&state, &session_id, format!("{no_motd}\r\n"));
                 }
             }
+            "CHATHISTORY" => {
+                if !conn.registered { continue; }
+                handle_chathistory(&conn, &msg, &state, &server_name, &session_id, &send);
+            }
             "QUIT" => {
                 break;
             }
@@ -653,6 +663,8 @@ where
     state.cap_echo_message.lock().unwrap().remove(&session_id);
     state.cap_server_time.lock().unwrap().remove(&session_id);
     state.cap_batch.lock().unwrap().remove(&session_id);
+    state.cap_account_notify.lock().unwrap().remove(&session_id);
+    state.cap_extended_join.lock().unwrap().remove(&session_id);
     {
         let mut channels = state.channels.lock().unwrap();
         for ch in channels.values_mut() {
@@ -687,7 +699,7 @@ fn handle_cap(
         Some("LS") => {
             conn.cap_negotiating = true;
             // Build capability list, including iroh endpoint ID if available
-            let mut caps = String::from("sasl message-tags multi-prefix echo-message server-time batch");
+            let mut caps = String::from("sasl message-tags multi-prefix echo-message server-time batch draft/chathistory account-notify extended-join");
             if let Some(ref iroh_id) = *state.server_iroh_id.lock().unwrap() {
                 caps.push_str(&format!(" iroh={iroh_id}"));
             }
@@ -734,6 +746,20 @@ fn handle_cap(
                             conn.cap_batch = true;
                             state.cap_batch.lock().unwrap().insert(session_id.to_string());
                             acked.push("batch");
+                        }
+                        "draft/chathistory" => {
+                            conn.cap_chathistory = true;
+                            acked.push("draft/chathistory");
+                        }
+                        "account-notify" => {
+                            conn.cap_account_notify = true;
+                            state.cap_account_notify.lock().unwrap().insert(session_id.to_string());
+                            acked.push("account-notify");
+                        }
+                        "extended-join" => {
+                            conn.cap_extended_join = true;
+                            state.cap_extended_join.lock().unwrap().insert(session_id.to_string());
+                            acked.push("extended-join");
                         }
                         _ => { all_ok = false; }
                     }
@@ -860,6 +886,9 @@ async fn handle_authenticate(
                                 vec![nick, "SASL authentication successful"],
                             );
                             send(state, session_id, format!("{success}\r\n"));
+
+                            // Broadcast account-notify to shared channels
+                            broadcast_account_notify(state, session_id, nick, &did);
                         }
                         Err(reason) => {
                             tracing::warn!(%session_id, "SASL auth failed: {reason}");
@@ -1147,7 +1176,10 @@ fn handle_join(
         }
     }
 
-    let join_msg = format!(":{hostmask} JOIN {channel}\r\n");
+    let std_join = make_standard_join(&hostmask, channel);
+    let realname = conn.realname.as_deref().unwrap_or(nick);
+    let ext_join = make_extended_join(&hostmask, channel, did, realname);
+
     let members: Vec<String> = state
         .channels
         .lock()
@@ -1156,13 +1188,19 @@ fn handle_join(
         .map(|ch| ch.members.iter().cloned().collect())
         .unwrap_or_default();
 
+    let ext_set = state.cap_extended_join.lock().unwrap();
     let conns = state.connections.lock().unwrap();
     for member_session in &members {
         if let Some(tx) = conns.get(member_session) {
-            let _ = tx.try_send(join_msg.clone());
+            if ext_set.contains(member_session) {
+                let _ = tx.try_send(ext_join.clone());
+            } else {
+                let _ = tx.try_send(std_join.clone());
+            }
         }
     }
     drop(conns);
+    drop(ext_set);
 
     // Broadcast JOIN to S2S peers
     let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
@@ -2702,4 +2740,203 @@ fn handle_away(
             send(state, session_id, format!("{reply}\r\n"));
         }
     }
+}
+
+// ── CHATHISTORY ──────────────────────────────────────────────────
+
+/// Parse an IRCv3 timestamp (e.g. `timestamp=2025-01-15T12:34:56.000Z`) to epoch seconds.
+fn parse_chathistory_ts(s: &str) -> Option<u64> {
+    let s = s.strip_prefix("timestamp=").unwrap_or(s);
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.timestamp() as u64)
+}
+
+fn handle_chathistory(
+    conn: &Connection,
+    msg: &irc::Message,
+    state: &Arc<SharedState>,
+    server_name: &str,
+    session_id: &str,
+    send: &dyn Fn(&Arc<SharedState>, &str, String),
+) {
+    let nick = conn.nick_or_star();
+
+    // CHATHISTORY <subcommand> <target> [<param1> [<param2>]] <limit>
+    if msg.params.len() < 3 {
+        let reply = Message::from_server(
+            server_name,
+            "FAIL",
+            vec!["CHATHISTORY", "NEED_MORE_PARAMS", "Insufficient parameters"],
+        );
+        send(state, session_id, format!("{reply}\r\n"));
+        return;
+    }
+
+    let subcmd = msg.params[0].to_uppercase();
+    let target = normalize_channel(&msg.params[1]);
+
+    // Verify user is a member of the channel
+    {
+        let channels = state.channels.lock().unwrap();
+        if let Some(ch) = channels.get(&target) {
+            if !ch.members.contains(session_id) {
+                let reply = Message::from_server(
+                    server_name,
+                    "FAIL",
+                    vec!["CHATHISTORY", "INVALID_TARGET", &target, "You are not in that channel"],
+                );
+                send(state, session_id, format!("{reply}\r\n"));
+                return;
+            }
+        } else {
+            let reply = Message::from_server(
+                server_name,
+                "FAIL",
+                vec!["CHATHISTORY", "INVALID_TARGET", &target, "No such channel"],
+            );
+            send(state, session_id, format!("{reply}\r\n"));
+            return;
+        }
+    }
+
+    let has_tags = state.cap_message_tags.lock().unwrap().contains(session_id);
+    let has_time = state.cap_server_time.lock().unwrap().contains(session_id);
+    let has_batch = state.cap_batch.lock().unwrap().contains(session_id);
+
+    // Fetch messages from DB based on subcommand
+    let messages: Vec<crate::db::MessageRow> = match subcmd.as_str() {
+        "BEFORE" => {
+            if msg.params.len() < 4 { vec![] } else {
+                let ts = parse_chathistory_ts(&msg.params[2]).unwrap_or(u64::MAX);
+                let limit = msg.params[3].parse::<usize>().unwrap_or(50).min(500);
+                state.with_db(|db| db.get_messages(&target, limit, Some(ts)))
+                    
+                    .unwrap_or_default()
+            }
+        }
+        "AFTER" => {
+            if msg.params.len() < 4 { vec![] } else {
+                let ts = parse_chathistory_ts(&msg.params[2]).unwrap_or(0);
+                let limit = msg.params[3].parse::<usize>().unwrap_or(50).min(500);
+                state.with_db(|db| db.get_messages_after(&target, ts, limit))
+                    
+                    .unwrap_or_default()
+            }
+        }
+        "LATEST" => {
+            if msg.params.len() < 4 { vec![] } else {
+                let limit = msg.params[3].parse::<usize>().unwrap_or(50).min(500);
+                if msg.params[2] == "*" {
+                    state.with_db(|db| db.get_messages(&target, limit, None))
+                        
+                        .unwrap_or_default()
+                } else {
+                    let ts = parse_chathistory_ts(&msg.params[2]).unwrap_or(0);
+                    state.with_db(|db| db.get_messages_after(&target, ts, limit))
+                        
+                        .unwrap_or_default()
+                }
+            }
+        }
+        "BETWEEN" => {
+            if msg.params.len() < 5 { vec![] } else {
+                let start = parse_chathistory_ts(&msg.params[2]).unwrap_or(0);
+                let end = parse_chathistory_ts(&msg.params[3]).unwrap_or(u64::MAX);
+                let limit = msg.params[4].parse::<usize>().unwrap_or(50).min(500);
+                state.with_db(|db| db.get_messages_between(&target, start, end, limit))
+                    
+                    .unwrap_or_default()
+            }
+        }
+        _ => vec![],
+    };
+
+    // Send as a batch
+    let batch_id = format!("ch{}", session_id.len());
+    if has_batch {
+        send(state, session_id, format!(
+            ":{server_name} BATCH +{batch_id} chathistory {target}\r\n"
+        ));
+    }
+
+    for row in &messages {
+        let mut tags = if has_tags { row.tags.clone() } else { std::collections::HashMap::new() };
+        if has_time {
+            let ts = chrono::DateTime::from_timestamp(row.timestamp as i64, 0)
+                .unwrap_or_default()
+                .format("%Y-%m-%dT%H:%M:%S.000Z")
+                .to_string();
+            tags.insert("time".to_string(), ts);
+        }
+        if has_batch {
+            tags.insert("batch".to_string(), batch_id.clone());
+        }
+
+        if !tags.is_empty() && has_tags {
+            let tag_msg = irc::Message {
+                tags,
+                prefix: Some(row.sender.clone()),
+                command: "PRIVMSG".to_string(),
+                params: vec![target.clone(), row.text.clone()],
+            };
+            send(state, session_id, format!("{tag_msg}\r\n"));
+        } else {
+            send(state, session_id, format!(
+                ":{} PRIVMSG {} :{}\r\n", row.sender, target, row.text
+            ));
+        }
+    }
+
+    if has_batch {
+        send(state, session_id, format!(
+            ":{server_name} BATCH -{batch_id}\r\n"
+        ));
+    }
+}
+
+// ── account-notify + extended-join helpers ────────────────────────
+
+/// Notify channel members about a user's account (DID) when they authenticate.
+/// Called after successful SASL authentication.
+pub fn broadcast_account_notify(
+    state: &SharedState,
+    session_id: &str,
+    nick: &str,
+    did: &str,
+) {
+    let hostmask = format!("{nick}!~u@host");
+    let line = format!(":{hostmask} ACCOUNT {did}\r\n");
+
+    // Find all channels this user is in
+    let channels = state.channels.lock().unwrap();
+    let mut notified = std::collections::HashSet::new();
+    for ch in channels.values() {
+        if ch.members.contains(session_id) {
+            let cap_set = state.cap_account_notify.lock().unwrap();
+            let conns = state.connections.lock().unwrap();
+            for member_sid in &ch.members {
+                if member_sid != session_id && !notified.contains(member_sid) {
+                    if cap_set.contains(member_sid) {
+                        if let Some(tx) = conns.get(member_sid) {
+                            let _ = tx.try_send(line.clone());
+                        }
+                    }
+                    notified.insert(member_sid.clone());
+                }
+            }
+        }
+    }
+}
+
+/// Build a JOIN line for extended-join capable clients.
+/// Format: `:nick!user@host JOIN #channel account :realname`
+pub fn make_extended_join(hostmask: &str, channel: &str, did: Option<&str>, realname: &str) -> String {
+    let account = did.unwrap_or("*");
+    format!(":{hostmask} JOIN {channel} {account} :{realname}\r\n")
+}
+
+/// Build a standard JOIN line.
+pub fn make_standard_join(hostmask: &str, channel: &str) -> String {
+    format!(":{hostmask} JOIN {channel}\r\n")
 }

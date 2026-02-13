@@ -203,6 +203,8 @@ pub struct SharedState {
     pub cap_server_time: Mutex<HashSet<String>>,
     /// Sessions that have negotiated batch capability.
     pub cap_batch: Mutex<HashSet<String>>,
+    pub cap_account_notify: Mutex<HashSet<String>>,
+    pub cap_extended_join: Mutex<HashSet<String>>,
     /// session_id -> iroh endpoint ID (for connections via iroh transport).
     pub session_iroh_ids: Mutex<HashMap<String, String>>,
     /// session_id -> away message (None = not away).
@@ -319,6 +321,8 @@ impl Server {
             cap_echo_message: Mutex::new(HashSet::new()),
             cap_server_time: Mutex::new(HashSet::new()),
             cap_batch: Mutex::new(HashSet::new()),
+            cap_account_notify: Mutex::new(HashSet::new()),
+            cap_extended_join: Mutex::new(HashSet::new()),
             session_iroh_ids: Mutex::new(HashMap::new()),
             session_away: Mutex::new(HashMap::new()),
             server_iroh_id: Mutex::new(None),

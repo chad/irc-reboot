@@ -236,6 +236,20 @@ pub async fn handle_incoming_s2s(
         }
     };
     let peer_id = conn.remote_id().to_string();
+
+    // Check allowlist: if --s2s-allowed-peers is set, only those peers can connect.
+    // The iroh endpoint provides cryptographic identity (public key), so this
+    // verification is tamper-proof — you can't spoof an endpoint ID.
+    let allowed = &state.config.s2s_allowed_peers;
+    if !allowed.is_empty() && !allowed.contains(&peer_id) {
+        tracing::warn!(
+            peer = %peer_id,
+            "Rejecting S2S connection: peer not in --s2s-allowed-peers allowlist"
+        );
+        conn.close(1u32.into(), b"not authorized");
+        return;
+    }
+
     tracing::info!(peer = %peer_id, "S2S incoming connection (routed by ALPN)");
     let peers = Arc::clone(&manager.peers);
     let event_tx = manager.event_tx.clone();

@@ -156,16 +156,18 @@ async fn main() -> Result<()> {
         tls_insecure: cli.tls_insecure,
     };
 
-    let (handle, mut events) = client::connect_with_stream(conn, config, signer);
+    let (mut handle, mut events) = client::connect_with_stream(conn, config.clone(), signer.clone());
 
     // Auto-join channels (queued until registration completes)
-    if let Some(ref channels) = cli.channels {
-        for ch in channels.split(',') {
-            let ch = ch.trim();
-            if !ch.is_empty() {
-                let _ = handle.join(ch).await;
-            }
-        }
+    let auto_join_channels: Vec<String> = cli.channels.as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    for ch in &auto_join_channels {
+        let _ = handle.join(ch).await;
     }
 
     // Detect terminal image capabilities BEFORE entering raw mode
@@ -203,7 +205,14 @@ async fn main() -> Result<()> {
     #[cfg(feature = "inline-images")]
     { app.picker = picker; }
 
-    let result = run_app(&mut terminal, &mut app, &handle, &mut events).await;
+    let mut reconnect_info = Some(ReconnectInfo {
+        config,
+        signer: signer.clone(),
+        channels: auto_join_channels,
+        iroh_addr: iroh_addr.clone(),
+    });
+
+    let result = run_app(&mut terminal, &mut app, &mut handle, &mut events, &mut reconnect_info).await;
 
     // Restore terminal
     disable_raw_mode()?;
@@ -348,11 +357,20 @@ async fn build_signer(cli: &Cli) -> Result<SignerResult> {
     Ok((None, None))
 }
 
+/// State needed to reconnect after a disconnect.
+struct ReconnectInfo {
+    config: ConnectConfig,
+    signer: Option<Arc<dyn ChallengeSigner>>,
+    channels: Vec<String>,
+    iroh_addr: Option<String>,
+}
+
 async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     app: &mut App,
-    handle: &client::ClientHandle,
+    handle: &mut client::ClientHandle,
     events: &mut tokio::sync::mpsc::Receiver<Event>,
+    reconnect_info: &mut Option<ReconnectInfo>,
 ) -> Result<()> {
     loop {
         terminal.draw(|f| ui::draw(f, app))?;
@@ -447,6 +465,67 @@ async fn run_app(
                 }
             }
             app.bg_result_rx = Some(bg_rx);
+        }
+
+        // Auto-reconnect logic
+        if app.reconnect_pending {
+            if app.reconnect_at.is_none() {
+                // Schedule first reconnect attempt
+                app.reconnect_at = Some(std::time::Instant::now() + app.reconnect_delay);
+                let secs = app.reconnect_delay.as_secs();
+                app.connection_state = format!("reconnecting in {secs}s");
+                app.status_msg(&format!("Will reconnect in {secs}s..."));
+            }
+
+            if let Some(at) = app.reconnect_at {
+                if std::time::Instant::now() >= at {
+                    app.reconnect_at = None;
+                    app.reconnect_pending = false;
+
+                    if let Some(ri) = reconnect_info.as_ref() {
+                        app.status_msg("Reconnecting...");
+                        app.connection_state = "connecting".to_string();
+
+                        match client::establish_connection(&ri.config).await {
+                            Ok(conn) => {
+                                let (new_handle, new_events) =
+                                    client::connect_with_stream(conn, ri.config.clone(), ri.signer.clone());
+                                *handle = new_handle;
+                                *events = new_events;
+
+                                // Re-join channels
+                                for ch in &ri.channels {
+                                    let _ = handle.join(ch).await;
+                                }
+                                // Also rejoin any channels we were in (from buffers)
+                                for buf_name in app.buffers.keys() {
+                                    if buf_name.starts_with('#') || buf_name.starts_with('&') {
+                                        if !ri.channels.iter().any(|c| c.eq_ignore_ascii_case(buf_name)) {
+                                            let _ = handle.join(buf_name).await;
+                                        }
+                                    }
+                                }
+
+                                app.reconnect_delay = Duration::from_secs(1);
+                                app.connected_at = Some(std::time::Instant::now());
+                                app.status_msg("Reconnected!");
+                            }
+                            Err(e) => {
+                                // Exponential backoff: 1s, 2s, 4s, 8s, ... capped at 60s
+                                app.reconnect_delay = (app.reconnect_delay * 2).min(Duration::from_secs(60));
+                                let secs = app.reconnect_delay.as_secs();
+                                app.connection_state = format!("reconnecting in {secs}s");
+                                app.status_msg(&format!("Reconnect failed: {e}. Retrying in {secs}s..."));
+                                app.reconnect_pending = true;
+                                app.reconnect_at = Some(std::time::Instant::now() + app.reconnect_delay);
+                            }
+                        }
+                    } else {
+                        app.status_msg("Cannot reconnect: no connection info available");
+                        app.should_quit = true;
+                    }
+                }
+            }
         }
 
         if app.should_quit {
@@ -747,7 +826,8 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
         Event::Disconnected { reason } => {
             app.connection_state = "disconnected".to_string();
             app.status_msg(&format!("Disconnected: {reason}"));
-            app.should_quit = true;
+            // Don't quit — reconnection is handled by the main loop
+            app.reconnect_pending = true;
         }
         Event::WhoisReply { nick: _, info } => {
             let buf = app.active_buffer.clone();
@@ -1197,6 +1277,7 @@ async fn process_input(
                 app.status_msg("  /names              List users in current channel");
                 app.status_msg("  /who #channel       Show who's in a channel");
                 app.status_msg("  /list               List all channels");
+                app.status_msg("  /history [N]        Fetch N messages of history (default 50)");
                 app.status_msg("── Messaging ────────────────────────────");
                 app.status_msg("  /msg target text    Private message");
                 app.status_msg("  /me action          Action message (* nick does something)");
@@ -1231,6 +1312,7 @@ async fn process_input(
                 app.status_msg("  /logout handle      Clear cached OAuth session");
                 app.status_msg("  /net                Show/hide network info popup (/stats)");
                 app.status_msg("  /debug              Toggle raw IRC line display");
+                app.status_msg("  /reconnect          Force reconnect to server");
                 app.status_msg("  /raw line           Send raw IRC command");
                 app.status_msg("  /quit [message]     Disconnect (/q)");
                 app.status_msg("── Keys ─────────────────────────────────");
@@ -1283,6 +1365,21 @@ async fn process_input(
             }
             "/motd" => {
                 handle.raw("MOTD").await?;
+            }
+            "/reconnect" => {
+                app.status_msg("Forcing reconnect...");
+                app.reconnect_pending = true;
+                app.reconnect_delay = Duration::from_secs(0);
+                app.reconnect_at = Some(std::time::Instant::now());
+            }
+            "/history" => {
+                let channel = app.active_buffer.clone();
+                if channel == "status" {
+                    app.status_msg("Switch to a channel first.");
+                } else {
+                    let limit = if arg.is_empty() { "50" } else { arg };
+                    handle.raw(&format!("CHATHISTORY LATEST {channel} * {limit}")).await?;
+                }
             }
             _ => {
                 app.status_msg(&format!("Unknown command: {cmd}. Type /help for help."));

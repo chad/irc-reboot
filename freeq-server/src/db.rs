@@ -304,6 +304,46 @@ impl Db {
         Ok(rows_vec)
     }
 
+    /// Get messages after a timestamp (oldest first).
+    pub fn get_messages_after(
+        &self,
+        channel: &str,
+        after: u64,
+        limit: usize,
+    ) -> SqlResult<Vec<MessageRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, channel, sender, text, timestamp, tags_json
+             FROM messages
+             WHERE channel = ?1 AND timestamp > ?2
+             ORDER BY timestamp ASC, id ASC
+             LIMIT ?3"
+        )?;
+        let rows = stmt.query_map(params![channel, after as i64, limit as i64], map_message_row)?;
+        rows.collect::<SqlResult<Vec<_>>>()
+    }
+
+    /// Get messages between two timestamps (oldest first).
+    pub fn get_messages_between(
+        &self,
+        channel: &str,
+        after: u64,
+        before: u64,
+        limit: usize,
+    ) -> SqlResult<Vec<MessageRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, channel, sender, text, timestamp, tags_json
+             FROM messages
+             WHERE channel = ?1 AND timestamp > ?2 AND timestamp < ?3
+             ORDER BY timestamp ASC, id ASC
+             LIMIT ?4"
+        )?;
+        let rows = stmt.query_map(
+            params![channel, after as i64, before as i64, limit as i64],
+            map_message_row,
+        )?;
+        rows.collect::<SqlResult<Vec<_>>>()
+    }
+
     /// Prune old messages for a channel, keeping only the most recent `max_keep`.
     pub fn prune_messages(&self, channel: &str, max_keep: usize) -> SqlResult<()> {
         self.conn.execute(

@@ -51,6 +51,12 @@ pub struct ServerConfig {
     #[arg(long, value_delimiter = ',')]
     pub s2s_peers: Vec<String>,
 
+    /// Allowed S2S peer endpoint IDs. If set, only these peers can connect.
+    /// If empty (default), any peer can connect (open federation).
+    /// Comma-separated list of hex endpoint IDs.
+    #[arg(long, value_delimiter = ',')]
+    pub s2s_allowed_peers: Vec<String>,
+
     /// Data directory for server state files (iroh key, etc.).
     /// Defaults to the directory containing --db-path, or current directory.
     #[arg(long)]
@@ -80,6 +86,7 @@ impl Default for ServerConfig {
             iroh: false,
             iroh_port: None,
             s2s_peers: vec![],
+            s2s_allowed_peers: vec![],
             data_dir: None,
             max_messages_per_channel: 10000,
             motd: None,
