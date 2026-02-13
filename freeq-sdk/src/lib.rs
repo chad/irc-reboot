@@ -14,10 +14,12 @@
 //! - [`irc`] — IRC message parsing/formatting
 
 pub mod auth;
+pub mod bot;
 pub mod client;
 pub mod crypto;
 pub mod did;
 pub mod e2ee;
+pub mod e2ee_did;
 pub mod event;
 pub mod irc;
 pub mod media;

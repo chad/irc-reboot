@@ -844,7 +844,8 @@ async fn handle_authenticate(
                             if let Some(ref nick) = conn.nick {
                                 let nick_lower = nick.to_lowercase();
                                 state.did_nicks.lock().unwrap().insert(did.clone(), nick_lower.clone());
-                                state.nick_owners.lock().unwrap().insert(nick_lower, did.clone());
+                                state.nick_owners.lock().unwrap().insert(nick_lower.clone(), did.clone());
+                                state.crdt_set_nick_owner(&nick_lower, &did);
                                 state.with_db(|db| db.save_identity(&did, &nick.to_lowercase()));
                             }
 
@@ -1139,6 +1140,7 @@ fn handle_join(
         let mut channels = state.channels.lock().unwrap();
         let ch = channels.entry(channel.to_string()).or_default();
         ch.members.insert(session_id.to_string());
+        state.crdt_join(channel, nick);
 
         if is_new_channel {
             // New channel: set founder if authenticated
@@ -1150,6 +1152,8 @@ fn handle_join(
             if let Some(d) = did {
                 ch.founder_did = Some(d.to_string());
                 ch.did_ops.insert(d.to_string());
+                state.crdt_set_founder(channel, d);
+                state.crdt_grant_op(channel, d);
             }
             ch.ops.insert(session_id.to_string());
             let ch_clone = ch.clone();
@@ -2012,6 +2016,8 @@ fn handle_topic(
                     ch.topic = Some(topic);
                 });
 
+            state.crdt_set_topic(channel, text, nick);
+
             // Persist channel state
             {
                 let channels = state.channels.lock().unwrap();
@@ -2114,6 +2120,8 @@ fn handle_part(
         .and_modify(|ch| {
             ch.members.remove(session_id);
         });
+
+    state.crdt_part(channel, conn.nick.as_deref().unwrap_or("*"));
 
     // Broadcast PART to S2S peers
     let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();

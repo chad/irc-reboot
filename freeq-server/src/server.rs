@@ -242,6 +242,8 @@ pub struct SharedState {
     pub iroh_endpoint: Mutex<Option<iroh::Endpoint>>,
     /// S2S manager (if clustering is active).
     pub s2s_manager: Mutex<Option<Arc<crate::s2s::S2sManager>>>,
+    /// CRDT document for cluster state convergence.
+    pub cluster_doc: crate::crdt::ClusterDoc,
     /// Database handle for persistence (None = in-memory only).
     pub db: Option<Mutex<Db>>,
     /// Server configuration (for MOTD, max messages, etc.).
@@ -266,6 +268,83 @@ impl SharedState {
                 }
             }
         })
+    }
+
+    // ── CRDT operations ────────────────────────────────────────────
+
+    /// Record a join in the CRDT.
+    pub fn crdt_join(&self, channel: &str, nick: &str) {
+        self.cluster_doc.join_channel(channel, nick, &self.server_name);
+    }
+
+    /// Record a part in the CRDT.
+    pub fn crdt_part(&self, channel: &str, nick: &str) {
+        self.cluster_doc.part_channel(channel, nick);
+    }
+
+    /// Record a topic change in the CRDT.
+    pub fn crdt_set_topic(&self, channel: &str, topic: &str, set_by: &str) {
+        self.cluster_doc.set_topic(channel, topic, set_by);
+    }
+
+    /// Record a nick-DID binding in the CRDT.
+    pub fn crdt_set_nick_owner(&self, nick: &str, did: &str) {
+        self.cluster_doc.set_nick_owner(nick, did);
+    }
+
+    /// Record a channel founder in the CRDT.
+    pub fn crdt_set_founder(&self, channel: &str, did: &str) {
+        self.cluster_doc.set_founder(channel, did);
+    }
+
+    /// Record a DID op grant in the CRDT.
+    pub fn crdt_grant_op(&self, channel: &str, did: &str) {
+        self.cluster_doc.grant_op(channel, did);
+    }
+
+    /// Record a DID op revoke in the CRDT.
+    pub fn crdt_revoke_op(&self, channel: &str, did: &str) {
+        self.cluster_doc.revoke_op(channel, did);
+    }
+
+    /// Record a ban in the CRDT.
+    pub fn crdt_add_ban(&self, channel: &str, mask: &str, set_by: &str) {
+        self.cluster_doc.add_ban(channel, mask, set_by);
+    }
+
+    /// Record a ban removal in the CRDT.
+    pub fn crdt_remove_ban(&self, channel: &str, mask: &str) {
+        self.cluster_doc.remove_ban(channel, mask);
+    }
+
+    /// Generate CRDT sync messages for all peers and broadcast them.
+    pub async fn crdt_broadcast_sync(&self) {
+        let manager = self.s2s_manager.lock().unwrap().clone();
+        let manager = match manager {
+            Some(m) => m,
+            None => return,
+        };
+
+        let peers: Vec<String> = manager.peers.lock().await.keys().cloned().collect();
+        for peer_id in &peers {
+            if let Some(msg_bytes) = self.cluster_doc.generate_sync_message(peer_id) {
+                let sync_msg = crate::s2s::S2sMessage::CrdtSync {
+                    data: {
+                        use base64::Engine;
+                        base64::engine::general_purpose::STANDARD.encode(&msg_bytes)
+                    },
+                    origin: self.server_name.clone(),
+                };
+                if let Some(tx) = manager.peers.lock().await.get(peer_id) {
+                    let _ = tx.send(sync_msg).await;
+                }
+            }
+        }
+    }
+
+    /// Receive a CRDT sync message from a peer.
+    pub fn crdt_receive_sync(&self, peer_id: &str, data: &[u8]) -> Result<(), String> {
+        self.cluster_doc.receive_sync_message(peer_id, data)
     }
 }
 
@@ -357,6 +436,7 @@ impl Server {
             server_iroh_id: Mutex::new(None),
             iroh_endpoint: Mutex::new(None),
             s2s_manager: Mutex::new(None),
+            cluster_doc: crate::crdt::ClusterDoc::new(&self.config.server_name),
             db: db.map(Mutex::new),
             config: self.config.clone(),
         }))
@@ -752,10 +832,10 @@ async fn process_s2s_message(
                 });
             }
 
+            state.crdt_join(&channel, &nick);
+
             let line = format!(":{nick}!{nick}@s2s JOIN {channel}\r\n");
             deliver_to_channel(state, &channel, &line);
-
-            // Send updated NAMES to local members so nick lists refresh
             send_names_update(state, &channel);
         }
 
@@ -769,6 +849,8 @@ async fn process_s2s_message(
                     ch.remote_members.remove(&nick);
                 }
             }
+
+            state.crdt_part(&channel, &nick);
 
             let line = format!(":{nick}!{nick}@s2s PART {channel}\r\n");
             deliver_to_channel(state, &channel, &line);
@@ -820,6 +902,7 @@ async fn process_s2s_message(
                 }
                 ch.topic = Some(TopicInfo::new(topic.clone(), set_by.clone()));
             }
+            state.crdt_set_topic(&channel, &topic, &set_by);
             let line = format!(":{set_by}!remote@s2s TOPIC {channel} :{topic}\r\n");
             deliver_to_channel(state, &channel, &line);
         }
@@ -856,6 +939,7 @@ async fn process_s2s_message(
 
             // Merge DID ops — union of both sets (additive, safe)
             for did in did_ops {
+                state.crdt_grant_op(&channel, &did);
                 ch.did_ops.insert(did);
             }
 
@@ -922,6 +1006,8 @@ async fn process_s2s_message(
                 }
             };
             manager.broadcast(response).await;
+            // Also send CRDT sync messages for convergent state
+            state.crdt_broadcast_sync().await;
         }
 
         S2sMessage::SyncResponse { server_id: peer_id, channels: remote_channels } => {
@@ -1083,7 +1169,6 @@ async fn process_s2s_message(
             for ch in channels.values_mut() {
                 if let Some(rm) = ch.remote_members.remove(&old) {
                     ch.remote_members.insert(new.clone(), rm);
-                    // Collect local members to notify
                     for s in &ch.members {
                         affected_sessions.insert(s.clone());
                     }
@@ -1091,11 +1176,29 @@ async fn process_s2s_message(
             }
             drop(channels);
 
-            // Notify affected local clients and send updated NAMES
             let conns = state.connections.lock().unwrap();
             for session_id in &affected_sessions {
                 if let Some(tx) = conns.get(session_id) {
                     let _ = tx.try_send(line.clone());
+                }
+            }
+        }
+
+        S2sMessage::CrdtSync { data, origin } => {
+            if origin == manager.server_id { return; }
+            use base64::Engine;
+            match base64::engine::general_purpose::STANDARD.decode(&data) {
+                Ok(bytes) => {
+                    if let Err(e) = state.crdt_receive_sync(&origin, &bytes) {
+                        tracing::warn!(peer = %origin, "CRDT sync receive error: {e}");
+                    } else {
+                        tracing::debug!(peer = %origin, "CRDT sync message applied");
+                        // Generate response sync messages back
+                        state.crdt_broadcast_sync().await;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(peer = %origin, "CRDT sync base64 decode error: {e}");
                 }
             }
         }

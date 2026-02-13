@@ -236,6 +236,17 @@ This document catalogs every feature implemented in Freeq, organized by category
 | Unicode passphrase support | ✅ | |
 | Tamper detection (GCM auth tag) | ✅ | |
 
+### DID-Based E2EE (ENC2) 🆕
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Identity-bound group encryption | ✅ | Key derived from sorted member DIDs |
+| Wire format: `ENC2:<epoch>:<nonce>:<ct>` | ✅ | Epoch tracks membership changes |
+| Group key rotation on member change | ✅ | New epoch = new key |
+| ECDH DM encryption (secp256k1) | ✅ | Pairwise key from DID document keys |
+| Wire format: `ENC2:dm:<nonce>:<ct>` | ✅ | DM variant |
+| DID-sorted deterministic derivation | ✅ | Same members = same key regardless of order |
+
 ---
 
 ## 7. Peer-to-Peer Encrypted DMs 🆕
@@ -295,16 +306,15 @@ This document catalogs every feature implemented in Freeq, organized by category
 | DID ops CRDT (grant/revoke) | ✅ | |
 | Sync message generation/receipt | ✅ | Automerge sync protocol |
 | Save/load from bytes | ✅ | |
+| **🆕** Live CRDT sync via S2S | ✅ | `CrdtSync` message type; mutations written to CRDT alongside in-memory state; Automerge sync messages exchanged on link establishment and after each remote sync |
 
 ### S2S Limitations (see also docs/s2s-audit.md)
 
 | Limitation | Notes |
 |------------|-------|
-| No S2S authentication | Any server can join the mesh |
 | Bans not propagated cross-server | Only local bans enforced |
 | S2S Join doesn't check bans or +i | Remote server should enforce |
 | ChannelCreated race in narrow window | Both servers may create simultaneously |
-| CRDT not wired to live S2S | Two separate state systems |
 | Rogue server can add `did_ops` | Authorization-on-write not implemented |
 
 ---
@@ -451,6 +461,10 @@ This document catalogs every feature implemented in Freeq, organized by category
 | Bluesky profile fetching | ✅ | Public API, no auth needed |
 | Media upload to PDS | ✅ | With DPoP retry |
 | Link preview fetching | ✅ | OpenGraph parsing |
+| **🆕** Bot framework | ✅ | Command routing, permission levels (Anyone/Auth/Admin), auto-help |
+| **🆕** DID-based E2EE (ENC2) | ✅ | Group key + ECDH DM encryption |
+| Echo bot example | ✅ | `examples/echo_bot.rs` |
+| Framework bot example | ✅ | `examples/framework_bot.rs` — commands with permissions |
 | IRC message parser with tag support | ✅ | |
 
 ---

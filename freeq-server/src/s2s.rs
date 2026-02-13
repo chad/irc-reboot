@@ -138,6 +138,14 @@ pub enum S2sMessage {
         /// Active channels and their topics.
         channels: Vec<ChannelInfo>,
     },
+
+    /// Automerge CRDT sync message for convergent state.
+    #[serde(rename = "crdt_sync")]
+    CrdtSync {
+        /// Base64-encoded Automerge sync message.
+        data: String,
+        origin: String,
+    },
 }
 
 /// Per-user info in a channel sync.
@@ -184,7 +192,7 @@ pub struct S2sManager {
     /// Our server's iroh endpoint ID.
     pub server_id: String,
     /// Connected peer servers: peer_id → sender for writing messages.
-    peers: Arc<tokio::sync::Mutex<HashMap<String, mpsc::Sender<S2sMessage>>>>,
+    pub peers: Arc<tokio::sync::Mutex<HashMap<String, mpsc::Sender<S2sMessage>>>>,
     /// Channel for S2S events that need to be applied to server state.
     pub event_tx: mpsc::Sender<S2sMessage>,
 }
