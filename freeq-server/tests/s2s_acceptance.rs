@@ -3,7 +3,7 @@
 //! These tests connect to TWO live IRC servers and verify that state
 //! syncs correctly between them. Run with:
 //!
-//!   LOCAL_SERVER=localhost:6667 REMOTE_SERVER=irc.freeq.at:6667 cargo test -p irc-server --test s2s_acceptance -- --nocapture --test-threads=1
+//!   LOCAL_SERVER=localhost:6667 REMOTE_SERVER=irc.freeq.at:6667 cargo test -p freeq-server --test s2s_acceptance -- --nocapture --test-threads=1
 //!
 //! Both servers must be running with --iroh and S2S peering configured.
 //! If environment variables aren't set, tests are skipped.
@@ -15,8 +15,8 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
-use irc_at_sdk::client::{self, ClientHandle, ConnectConfig};
-use irc_at_sdk::event::Event;
+use freeq_sdk::client::{self, ClientHandle, ConnectConfig};
+use freeq_sdk::event::Event;
 
 /// How long to wait for an event before considering it failed.
 const TIMEOUT: Duration = Duration::from_secs(15);

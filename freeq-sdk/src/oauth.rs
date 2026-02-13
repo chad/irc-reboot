@@ -125,7 +125,7 @@ impl OAuthSession {
 pub fn default_session_path(handle: &str) -> std::path::PathBuf {
     let config_dir = dirs::config_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    config_dir.join("irc-at-tui").join(format!("{handle}.session.json"))
+    config_dir.join("freeq-tui").join(format!("{handle}.session.json"))
 }
 
 /// Authorization server metadata (RFC 8414 / AT Protocol extensions).

@@ -1,4 +1,4 @@
-# irc-reboot
+# freeq
 
 IRC server and client with AT Protocol (Bluesky) identity authentication,
 end-to-end encrypted channels, iroh QUIC transport, peer-to-peer DMs,
@@ -12,9 +12,9 @@ for nick ownership, and usable for DID-based bans, invites, and persistent ops.
 ## Architecture
 
 ```
-irc-server/     IRC server with SASL, WebSocket, iroh, S2S federation
-irc-at-sdk/     Reusable client SDK (connect, auth, events, E2EE, P2P)
-irc-at-tui/     Terminal UI client built on the SDK
+freeq-server/     IRC server with SASL, WebSocket, iroh, S2S federation
+freeq-sdk/     Reusable client SDK (connect, auth, events, E2EE, P2P)
+freeq-tui/     Terminal UI client built on the SDK
 ```
 
 The SDK exposes a `(ClientHandle, Receiver<Event>)` pattern — any UI or bot
@@ -46,23 +46,23 @@ cargo build --release
 
 ```sh
 # Minimal: plain TCP only, in-memory
-cargo run --release --bin irc-server
+cargo run --release --bin freeq-server
 
 # With persistence
-cargo run --release --bin irc-server -- --db-path data/irc.db
+cargo run --release --bin freeq-server -- --db-path data/irc.db
 
 # With TLS
-cargo run --release --bin irc-server -- \
+cargo run --release --bin freeq-server -- \
   --tls-cert certs/cert.pem --tls-key certs/key.pem
 
 # With WebSocket + REST API
-cargo run --release --bin irc-server -- --web-addr 0.0.0.0:8080
+cargo run --release --bin freeq-server -- --web-addr 0.0.0.0:8080
 
 # With iroh transport (QUIC, NAT-traversing)
-cargo run --release --bin irc-server -- --iroh
+cargo run --release --bin freeq-server -- --iroh
 
 # Full production setup
-cargo run --release --bin irc-server -- \
+cargo run --release --bin freeq-server -- \
   --listen-addr 0.0.0.0:6667 \
   --tls-listen-addr 0.0.0.0:6697 \
   --tls-cert /etc/letsencrypt/live/example.com/fullchain.pem \
@@ -86,33 +86,33 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
 
 ```sh
 # Guest (no auth)
-cargo run --release --bin irc-at-tui -- 127.0.0.1:6667 mynick
+cargo run --release --bin freeq-tui -- 127.0.0.1:6667 mynick
 
 # Bluesky OAuth (opens browser)
-cargo run --release --bin irc-at-tui -- 127.0.0.1:6697 mynick \
+cargo run --release --bin freeq-tui -- 127.0.0.1:6697 mynick \
   --handle alice.bsky.social
 
 # App password fallback
-cargo run --release --bin irc-at-tui -- 127.0.0.1:6667 mynick \
+cargo run --release --bin freeq-tui -- 127.0.0.1:6667 mynick \
   --handle alice.bsky.social --app-password xxxx-xxxx-xxxx-xxxx
 
 # Auto-join channels
-cargo run --release --bin irc-at-tui -- 127.0.0.1:6667 mynick \
+cargo run --release --bin freeq-tui -- 127.0.0.1:6667 mynick \
   -c '#general,#random'
 
 # Explicit iroh transport
-cargo run --release --bin irc-at-tui -- 127.0.0.1:6667 mynick \
+cargo run --release --bin freeq-tui -- 127.0.0.1:6667 mynick \
   --iroh-addr <endpoint-id>
 
 # Vi keybindings
-cargo run --release --bin irc-at-tui -- 127.0.0.1:6667 mynick --vi
+cargo run --release --bin freeq-tui -- 127.0.0.1:6667 mynick --vi
 ```
 
 **Iroh auto-discovery**: When connecting to a server that has `--iroh`
 enabled, the TUI probes `CAP LS` for the `iroh=<endpoint-id>` capability
 and auto-upgrades to iroh QUIC transport. No manual endpoint ID needed.
 
-OAuth sessions are cached to `~/.config/irc-at-tui/<handle>.session.json`
+OAuth sessions are cached to `~/.config/freeq-tui/<handle>.session.json`
 so you don't need to re-authenticate on every launch.
 
 ### Connect with a Standard IRC Client
@@ -124,7 +124,7 @@ configuration needed.
 ### Connect via WebSocket
 
 When `--web-addr` is set, the server accepts WebSocket connections at
-`ws://<addr>/irc`. A test HTML client is included at `irc-server/test-client.html`.
+`ws://<addr>/irc`. A test HTML client is included at `freeq-server/test-client.html`.
 
 ## Authentication
 
@@ -213,7 +213,7 @@ server entirely.
 ```
 
 P2P conversations appear in dedicated `p2p:<short-id>` buffers. Wire format
-is newline-delimited JSON (not IRC protocol). ALPN: `irc-reboot/p2p-dm/1`.
+is newline-delimited JSON (not IRC protocol). ALPN: `freeq/p2p-dm/1`.
 
 P2P endpoint IDs are visible in WHOIS (numeric `672`).
 
@@ -227,10 +227,10 @@ ops across the federation.
 
 ```sh
 # Server A: just enable iroh (accepts incoming S2S connections)
-cargo run --release --bin irc-server -- --iroh
+cargo run --release --bin freeq-server -- --iroh
 
 # Server B: enable iroh + connect to Server A
-cargo run --release --bin irc-server -- --iroh \
+cargo run --release --bin freeq-server -- --iroh \
   --s2s-peers <server-a-endpoint-id>
 ```
 
@@ -264,7 +264,7 @@ conflict-free convergence:
 ```sh
 # Run against two live servers
 LOCAL_SERVER=localhost:6667 REMOTE_SERVER=irc.freeq.at:6667 \
-  cargo test -p irc-server --test s2s_acceptance -- --nocapture --test-threads=1
+  cargo test -p freeq-server --test s2s_acceptance -- --nocapture --test-threads=1
 ```
 
 9 tests verify: connectivity, bidirectional message relay, NAMES sync,
@@ -330,7 +330,7 @@ semantics** — the same content in two representations:
 | Client | What they see |
 |--------|--------------|
 | irssi, WeeChat | `Sunset https://cdn.bsky.app/img/...` (clickable link) |
-| irc-at-tui | `🖼 [image/jpeg] Sunset 1200×800 https://cdn.bsky.app/img/...` |
+| freeq-tui | `🖼 [image/jpeg] Sunset 1200×800 https://cdn.bsky.app/img/...` |
 
 Media is hosted externally (AT Protocol PDS blob storage). The IRC server
 never handles media bytes — it just relays tagged messages.
@@ -467,14 +467,14 @@ All writes go through IRC — the REST API is strictly read-only.
 ## Server Configuration
 
 ```
-irc-server [OPTIONS]
+freeq-server [OPTIONS]
 
 Options:
   --listen-addr <ADDR>            Plain TCP address [default: 127.0.0.1:6667]
   --tls-listen-addr <ADDR>        TLS address [default: 127.0.0.1:6697]
   --tls-cert <PATH>               TLS certificate PEM file
   --tls-key <PATH>                TLS private key PEM file
-  --server-name <NAME>            Server name [default: irc-reboot]
+  --server-name <NAME>            Server name [default: freeq]
   --challenge-timeout-secs <N>    SASL challenge validity [default: 60]
   --db-path <PATH>                SQLite database path (omit for in-memory)
   --web-addr <ADDR>               HTTP/WebSocket listener address
@@ -504,7 +504,7 @@ cargo test
 
 # S2S federation acceptance tests (9 tests, requires two live servers)
 LOCAL_SERVER=localhost:6667 REMOTE_SERVER=irc.freeq.at:6667 \
-  cargo test -p irc-server --test s2s_acceptance -- --nocapture --test-threads=1
+  cargo test -p freeq-server --test s2s_acceptance -- --nocapture --test-threads=1
 ```
 
 **104 tests** covering:

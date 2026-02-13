@@ -1,20 +1,20 @@
 [package]
-name = "irc-server"
+name = "freeq-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "IRC server with AT Protocol SASL authentication"
 
 [lib]
-name = "irc_server"
+name = "freeq_server"
 path = "src/lib.rs"
 
 [[bin]]
-name = "irc-server"
+name = "freeq-server"
 path = "src/main.rs"
 
 [dependencies]
-irc-at-sdk = { path = "../irc-at-sdk" }
+freeq-sdk = { path = "../freeq-sdk" }
 tokio = { workspace = true }
 tokio-rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
@@ -37,6 +37,6 @@ iroh-quinn = { workspace = true }
 automerge = { workspace = true }
 
 [dev-dependencies]
-irc-at-sdk = { path = "../irc-at-sdk" }
+freeq-sdk = { path = "../freeq-sdk" }
 rcgen = "0.13"
 tempfile = "3"

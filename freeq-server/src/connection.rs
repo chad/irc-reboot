@@ -816,7 +816,7 @@ fn try_complete_registration(
         irc::RPL_YOURHOST,
         vec![
             nick,
-            &format!("Your host is {server_name}, running irc-reboot 0.1"),
+            &format!("Your host is {server_name}, running freeq 0.1"),
         ],
     );
     let created = Message::from_server(
@@ -827,7 +827,7 @@ fn try_complete_registration(
     let myinfo = Message::from_server(
         server_name,
         irc::RPL_MYINFO,
-        vec![nick, server_name, "irc-reboot-0.1", "o", "o"],
+        vec![nick, server_name, "freeq-0.1", "o", "o"],
     );
 
     for msg in [welcome, yourhost, created, myinfo] {
@@ -1960,7 +1960,7 @@ fn handle_whois(
     let whoisserver = Message::from_server(
         server_name,
         irc::RPL_WHOISSERVER,
-        vec![my_nick, target_nick, server_name, "IRC Reboot"],
+        vec![my_nick, target_nick, server_name, "freeq"],
     );
     send(state, session_id, format!("{whoisserver}\r\n"));
 

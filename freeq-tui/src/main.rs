@@ -13,13 +13,13 @@ use crossterm::terminal::{
 };
 use crossterm::ExecutableCommand;
 use editor::EditAction;
-use irc_at_sdk::auth::{ChallengeSigner, KeySigner, PdsSessionSigner};
-use irc_at_sdk::client::{self, ConnectConfig};
-use irc_at_sdk::crypto::PrivateKey;
-use irc_at_sdk::did::DidResolver;
-use irc_at_sdk::event::Event;
-use irc_at_sdk::oauth;
-use irc_at_sdk::pds;
+use freeq_sdk::auth::{ChallengeSigner, KeySigner, PdsSessionSigner};
+use freeq_sdk::client::{self, ConnectConfig};
+use freeq_sdk::crypto::PrivateKey;
+use freeq_sdk::did::DidResolver;
+use freeq_sdk::event::Event;
+use freeq_sdk::oauth;
+use freeq_sdk::pds;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
@@ -27,7 +27,7 @@ use crate::app::App;
 
 /// Minimal TUI client for IRC with AT Protocol authentication.
 #[derive(Parser, Debug)]
-#[command(name = "irc-at-tui", version, about)]
+#[command(name = "freeq-tui", version, about)]
 struct Cli {
     /// Server address (host:port).
     server: String,
@@ -450,8 +450,8 @@ async fn run_app(
     Ok(())
 }
 
-fn process_p2p_event(app: &mut App, event: irc_at_sdk::p2p::P2pEvent) {
-    use irc_at_sdk::p2p::P2pEvent;
+fn process_p2p_event(app: &mut App, event: freeq_sdk::p2p::P2pEvent) {
+    use freeq_sdk::p2p::P2pEvent;
     match event {
         P2pEvent::EndpointReady { endpoint_id } => {
             app.status_msg(&format!("P2P endpoint ready: {endpoint_id}"));
@@ -532,8 +532,8 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
                     from.to_lowercase()
                 };
                 if let Some(key) = app.channel_keys.get(&buf_key) {
-                    if irc_at_sdk::e2ee::is_encrypted(&text) {
-                        match irc_at_sdk::e2ee::decrypt(key, &text) {
+                    if freeq_sdk::e2ee::is_encrypted(&text) {
+                        match freeq_sdk::e2ee::decrypt(key, &text) {
                             Ok(plaintext) => (plaintext, true),
                             Err(_) => {
                                 // Wrong key or tampered — show error inline
@@ -545,7 +545,7 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
                         // (could be from a user who hasn't enabled E2EE)
                         (text.clone(), false)
                     }
-                } else if irc_at_sdk::e2ee::is_encrypted(&text) {
+                } else if freeq_sdk::e2ee::is_encrypted(&text) {
                     // Encrypted but we don't have the key
                     (format!("🔒 [encrypted message — use /encrypt <passphrase> to decrypt]"), false)
                 } else {
@@ -555,7 +555,7 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
             let _ = was_encrypted; // may be used later for UI indicators
 
             // Check for media attachment in tags
-            let media = irc_at_sdk::media::MediaAttachment::from_tags(&tags);
+            let media = freeq_sdk::media::MediaAttachment::from_tags(&tags);
 
             // Detect CTCP ACTION (/me)
             if text.starts_with('\x01') && text.ends_with('\x01') {
@@ -600,7 +600,7 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
                 });
             } else {
                 // Check for link preview in tags
-                let link_preview = irc_at_sdk::media::LinkPreview::from_tags(&tags);
+                let link_preview = freeq_sdk::media::LinkPreview::from_tags(&tags);
                 if let Some(preview) = link_preview {
                     let buf_name = if !target.starts_with('#') && !target.starts_with('&') {
                         if from == app.nick { target.clone() } else { from.clone() }
@@ -623,7 +623,7 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
                         let handle_clone = handle.clone();
                         let target_clone = target.clone();
                         tokio::spawn(async move {
-                            if let Ok(preview) = irc_at_sdk::media::fetch_link_preview(&url).await {
+                            if let Ok(preview) = freeq_sdk::media::fetch_link_preview(&url).await {
                                 let _ = handle_clone.send_link_preview(&target_clone, &preview).await;
                             }
                         });
@@ -633,7 +633,7 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
         }
         Event::TagMsg { from, target, tags } => {
             // Handle reactions
-            if let Some(reaction) = irc_at_sdk::media::Reaction::from_tags(&tags) {
+            if let Some(reaction) = freeq_sdk::media::Reaction::from_tags(&tags) {
                 let buf_name = if !target.starts_with('#') && !target.starts_with('&') {
                     if from == app.nick { target.clone() } else { from.clone() }
                 } else {
@@ -762,7 +762,7 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
                 let buf_clone = buf.clone();
                 let avatar_cache = app.image_cache.clone();
                 tokio::spawn(async move {
-                    if let Ok(profile) = irc_at_sdk::pds::fetch_profile(&actor).await {
+                    if let Ok(profile) = freeq_sdk::pds::fetch_profile(&actor).await {
                         if let Some(ref avatar_url) = profile.avatar {
                             fetch_image_if_needed_direct(&avatar_cache, avatar_url);
                         }
@@ -816,7 +816,7 @@ async fn process_input(
                 } else {
                     let target = app.active_buffer.clone();
                     if target != "status" {
-                        let reaction = irc_at_sdk::media::Reaction {
+                        let reaction = freeq_sdk::media::Reaction {
                             emoji: arg.trim().to_string(),
                             msgid: None, // TODO: track message IDs for targeted reactions
                         };
@@ -842,7 +842,7 @@ async fn process_input(
                     let buf = target.clone();
                     app.buffer_mut(&buf).push_system(&format!("Fetching preview for {url}..."));
                     tokio::spawn(async move {
-                        match irc_at_sdk::media::fetch_link_preview(&url).await {
+                        match freeq_sdk::media::fetch_link_preview(&url).await {
                             Ok(preview) => {
                                 let _ = handle_clone.send_link_preview(&buf, &preview).await;
                             }
@@ -1043,7 +1043,7 @@ async fn process_input(
                         app.status_msg("Usage: /logout <handle>");
                         app.status_msg("  Clears cached OAuth session for the given handle.");
                     } else {
-                        let cache_path = irc_at_sdk::oauth::default_session_path(handle_hint);
+                        let cache_path = freeq_sdk::oauth::default_session_path(handle_hint);
                         if cache_path.exists() {
                             let _ = std::fs::remove_file(&cache_path);
                             app.status_msg(&format!("Cleared cached session for {handle_hint}."));
@@ -1081,7 +1081,7 @@ async fn process_input(
                         app.status_msg("  Messages are encrypted client-side — the server only sees ciphertext.");
                     }
                 } else {
-                    let key = irc_at_sdk::e2ee::derive_key(arg, &channel);
+                    let key = freeq_sdk::e2ee::derive_key(arg, &channel);
                     app.channel_keys.insert(channel.clone(), key);
                     app.buffer_mut(&channel).push_system(
                         "🔒 End-to-end encryption enabled. Messages in this channel are now encrypted."
@@ -1113,7 +1113,7 @@ async fn process_input(
                             app.status_msg("P2P already running.");
                         } else {
                             app.status_msg("Starting P2P endpoint...");
-                            match irc_at_sdk::p2p::start().await {
+                            match freeq_sdk::p2p::start().await {
                                 Ok((p2p_handle, rx)) => {
                                     app.status_msg(&format!("✓ P2P ready! Your endpoint ID: {}", p2p_handle.endpoint_id));
                                     app.p2p_handle = Some(p2p_handle);
@@ -1231,7 +1231,7 @@ async fn process_input(
         } else {
             // Encrypt if E2EE is enabled for this channel
             let wire_text = if let Some(key) = app.channel_keys.get(&target) {
-                match irc_at_sdk::e2ee::encrypt(key, input) {
+                match freeq_sdk::e2ee::encrypt(key, input) {
                     Ok(encrypted) => encrypted,
                     Err(e) => {
                         app.status_msg(&format!("Encryption failed: {e}"));
@@ -1313,7 +1313,7 @@ async fn upload_and_send_media(
     // Channel name for the record (if target is a channel)
     let channel = if target.starts_with('#') { Some(target) } else { None };
 
-    match irc_at_sdk::media::upload_media_to_pds(
+    match freeq_sdk::media::upload_media_to_pds(
         &uploader.pds_url,
         &uploader.did,
         &uploader.access_token,
@@ -1326,7 +1326,7 @@ async fn upload_and_send_media(
         cross_post,
     ).await {
         Ok(result) => {
-            let media = irc_at_sdk::media::MediaAttachment {
+            let media = freeq_sdk::media::MediaAttachment {
                 content_type: content_type.to_string(),
                 url: result.url.clone(),
                 alt: alt.map(|s| s.to_string()),
@@ -1410,7 +1410,7 @@ fn fetch_image_if_needed(cache: &crate::app::ImageCache, url: &str) {
 }
 
 /// Format a media attachment for display in the TUI.
-fn format_link_preview(preview: &irc_at_sdk::media::LinkPreview) -> String {
+fn format_link_preview(preview: &freeq_sdk::media::LinkPreview) -> String {
     let mut parts = vec!["🔗".to_string()];
     if let Some(ref title) = preview.title {
         parts.push(title.clone());
@@ -1445,7 +1445,7 @@ fn extract_url(text: &str) -> Option<String> {
     None
 }
 
-fn format_media_display(media: &irc_at_sdk::media::MediaAttachment) -> String {
+fn format_media_display(media: &freeq_sdk::media::MediaAttachment) -> String {
     let type_icon = if media.is_image() {
         "🖼"
     } else if media.is_video() {

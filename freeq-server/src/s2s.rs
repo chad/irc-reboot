@@ -39,7 +39,7 @@ use tokio::sync::mpsc;
 use crate::server::SharedState;
 
 /// ALPN for server-to-server links.
-pub const S2S_ALPN: &[u8] = b"irc-reboot/s2s/1";
+pub const S2S_ALPN: &[u8] = b"freeq/s2s/1";
 
 /// Messages exchanged between servers.
 #[derive(Debug, Clone, Serialize, Deserialize)]

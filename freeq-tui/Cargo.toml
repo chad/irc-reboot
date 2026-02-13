@@ -1,16 +1,16 @@
 [package]
-name = "irc-at-tui"
+name = "freeq-tui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Minimal TUI client for IRC with AT Protocol authentication"
 
 [[bin]]
-name = "irc-at-tui"
+name = "freeq-tui"
 path = "src/main.rs"
 
 [dependencies]
-irc-at-sdk = { path = "../irc-at-sdk" }
+freeq-sdk = { path = "../freeq-sdk" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

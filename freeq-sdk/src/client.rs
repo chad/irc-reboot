@@ -208,7 +208,7 @@ pub enum EstablishedConnection {
 }
 
 /// ALPN for IRC-over-iroh (must match server).
-pub const IROH_ALPN: &[u8] = b"irc-reboot/iroh/1";
+pub const IROH_ALPN: &[u8] = b"freeq/iroh/1";
 
 /// Establish a connection to an IRC server via iroh.
 ///

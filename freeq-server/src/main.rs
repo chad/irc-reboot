@@ -8,10 +8,10 @@ async fn main() -> Result<()> {
     // Iroh brings in ring, but rustls needs an explicit provider selection.
     let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("irc_server=info".parse()?))
+        .with_env_filter(EnvFilter::from_default_env().add_directive("freeq_server=info".parse()?))
         .init();
 
-    let config = irc_server::config::ServerConfig::parse();
+    let config = freeq_server::config::ServerConfig::parse();
     tracing::info!("Starting IRC server on {}", config.listen_addr);
     if config.tls_enabled() {
         tracing::info!("TLS enabled on {}", config.tls_listen_addr);
@@ -23,6 +23,6 @@ async fn main() -> Result<()> {
         tracing::info!("Iroh transport enabled");
     }
 
-    let server = irc_server::server::Server::new(config);
+    let server = freeq_server::server::Server::new(config);
     server.run().await
 }

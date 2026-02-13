@@ -22,7 +22,7 @@
 //! key = HKDF-SHA256(
 //!   ikm: passphrase bytes,
 //!   salt: SHA-256(channel name lowercase),
-//!   info: b"irc-reboot-e2ee-v1"
+//!   info: b"freeq-e2ee-v1"
 //! )
 //! ```
 //!
@@ -45,7 +45,7 @@ pub fn derive_key(passphrase: &str, channel: &str) -> [u8; 32] {
     let salt = Sha256::digest(channel.to_lowercase().as_bytes());
     let hk = Hkdf::<Sha256>::new(Some(&salt), passphrase.as_bytes());
     let mut key = [0u8; 32];
-    hk.expand(b"irc-reboot-e2ee-v1", &mut key)
+    hk.expand(b"freeq-e2ee-v1", &mut key)
         .expect("32 bytes is a valid length for HKDF-SHA256");
     key
 }

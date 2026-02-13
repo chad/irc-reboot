@@ -7,11 +7,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use irc_at_sdk::auth::{ChallengeSigner, KeySigner};
-use irc_at_sdk::client::{self, ConnectConfig};
-use irc_at_sdk::crypto::PrivateKey;
-use irc_at_sdk::did::{self, DidResolver};
-use irc_at_sdk::event::Event;
+use freeq_sdk::auth::{ChallengeSigner, KeySigner};
+use freeq_sdk::client::{self, ConnectConfig};
+use freeq_sdk::crypto::PrivateKey;
+use freeq_sdk::did::{self, DidResolver};
+use freeq_sdk::event::Event;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
@@ -19,13 +19,13 @@ use tokio::time::timeout;
 async fn start_test_server(
     resolver: DidResolver,
 ) -> (std::net::SocketAddr, tokio::task::JoinHandle<anyhow::Result<()>>) {
-    let config = irc_server::config::ServerConfig {
+    let config = freeq_server::config::ServerConfig {
         listen_addr: "127.0.0.1:0".to_string(),
         server_name: "test-server".to_string(),
         challenge_timeout_secs: 60,
         ..Default::default()
     };
-    let server = irc_server::server::Server::with_resolver(config, resolver);
+    let server = freeq_server::server::Server::with_resolver(config, resolver);
     server.start().await.unwrap()
 }
 
@@ -1110,13 +1110,13 @@ async fn auth_fails_expired_challenge() {
     let resolver = DidResolver::static_map(docs);
 
     // Server with 1-second challenge timeout
-    let config = irc_server::config::ServerConfig {
+    let config = freeq_server::config::ServerConfig {
         listen_addr: "127.0.0.1:0".to_string(),
         server_name: "test-server".to_string(),
         challenge_timeout_secs: 1,
         ..Default::default()
     };
-    let server = irc_server::server::Server::with_resolver(config, resolver);
+    let server = freeq_server::server::Server::with_resolver(config, resolver);
     let (addr, server_handle) = server.start().await.unwrap();
 
     // Use raw TCP to introduce a delay between receiving challenge and sending response
@@ -1435,7 +1435,7 @@ async fn tls_connection() {
     std::fs::File::create(&cert_path).unwrap().write_all(cert_pem.as_bytes()).unwrap();
     std::fs::File::create(&key_path).unwrap().write_all(key_pem.as_bytes()).unwrap();
 
-    let config = irc_server::config::ServerConfig {
+    let config = freeq_server::config::ServerConfig {
         listen_addr: "127.0.0.1:0".to_string(),
         tls_listen_addr: "127.0.0.1:0".to_string(),
         tls_cert: Some(cert_path.to_str().unwrap().to_string()),
@@ -1449,7 +1449,7 @@ async fn tls_connection() {
         s2s_peers: vec![],
     };
 
-    let server = irc_server::server::Server::with_resolver(config, empty_resolver());
+    let server = freeq_server::server::Server::with_resolver(config, empty_resolver());
     let (addr, tls_addr, server_handle) = server.start_tls().await.unwrap();
 
     // Connect via TLS using the SDK
@@ -1521,7 +1521,7 @@ async fn media_tags_passthrough() {
     expect_event(&mut events1, 2000, |e| matches!(e, Event::Joined { nick, .. } if nick == "bob"), "Alice sees bob").await;
 
     // Alice sends a media message with tags
-    let media = irc_at_sdk::media::MediaAttachment {
+    let media = freeq_sdk::media::MediaAttachment {
         content_type: "image/jpeg".to_string(),
         url: "https://cdn.example.com/photo.jpg".to_string(),
         alt: Some("A sunset".to_string()),
@@ -1589,7 +1589,7 @@ async fn tagmsg_and_reactions() {
     expect_event(&mut events1, 2000, |e| matches!(e, Event::Joined { nick, .. } if nick == "bob"), "Alice sees bob").await;
 
     // Alice sends a reaction via TAGMSG
-    let reaction = irc_at_sdk::media::Reaction {
+    let reaction = freeq_sdk::media::Reaction {
         emoji: "🔥".to_string(),
         msgid: None,
     };
@@ -1603,7 +1603,7 @@ async fn tagmsg_and_reactions() {
     ).await;
 
     if let Event::TagMsg { tags, .. } = msg {
-        let parsed = irc_at_sdk::media::Reaction::from_tags(&tags).unwrap();
+        let parsed = freeq_sdk::media::Reaction::from_tags(&tags).unwrap();
         assert_eq!(parsed.emoji, "🔥");
     } else {
         panic!("Expected TagMsg event");
@@ -1621,14 +1621,14 @@ async fn start_test_server_with_db(
     resolver: DidResolver,
     db_path: &str,
 ) -> (std::net::SocketAddr, tokio::task::JoinHandle<anyhow::Result<()>>) {
-    let config = irc_server::config::ServerConfig {
+    let config = freeq_server::config::ServerConfig {
         listen_addr: "127.0.0.1:0".to_string(),
         server_name: "test-server".to_string(),
         challenge_timeout_secs: 60,
         db_path: Some(db_path.to_string()),
         ..Default::default()
     };
-    let server = irc_server::server::Server::with_resolver(config, resolver);
+    let server = freeq_server::server::Server::with_resolver(config, resolver);
     server.start().await.unwrap()
 }
 
@@ -1798,7 +1798,7 @@ async fn persistence_bans_survive_restart() {
 
     // Verify the ban is in the database directly
     {
-        let db = irc_server::db::Db::open(db_str).unwrap();
+        let db = freeq_server::db::Db::open(db_str).unwrap();
         let channels = db.load_channels().unwrap();
         let ch = channels.get("#btest").unwrap();
         assert_eq!(ch.bans.len(), 1);

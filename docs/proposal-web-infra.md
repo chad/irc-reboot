@@ -1,8 +1,8 @@
-# Proposal: Web Transport for irc-reboot
+# Proposal: Web Transport for freeq
 
 ## Summary
 
-Add WebSocket and HTTP access to irc-reboot. The WebSocket carries raw IRC
+Add WebSocket and HTTP access to freeq. The WebSocket carries raw IRC
 lines — not a new JSON protocol. The HTTP layer provides read-only REST
 endpoints backed by the persistence layer. No web UI ships with the server.
 
@@ -10,7 +10,7 @@ This proposal assumes persistence (SQLite) is already implemented.
 
 ## Design Principles
 
-irc-reboot is infrastructure, not a product. The web layer follows from that:
+freeq is infrastructure, not a product. The web layer follows from that:
 
 - **One protocol.** IRC is the wire protocol. WebSocket is a transport, not
   a new protocol. Web clients speak IRC over WebSocket, the same way they
@@ -75,7 +75,7 @@ type, no adapter pattern, no engine extraction.
 ### File Changes
 
 ```
-irc-server/
+freeq-server/
   src/
     connection.rs   Add WebSocket stream adapter (AsyncRead/AsyncWrite over WS frames)
     web.rs          NEW — axum router: WS upgrade endpoint + REST endpoints

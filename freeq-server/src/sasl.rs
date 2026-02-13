@@ -14,8 +14,8 @@
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use chrono::Utc;
-use irc_at_sdk::did::DidResolver;
-use irc_at_sdk::pds;
+use freeq_sdk::did::DidResolver;
+use freeq_sdk::pds;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -434,8 +434,8 @@ mod tests {
 
     #[tokio::test]
     async fn verify_with_real_crypto() {
-        use irc_at_sdk::crypto::PrivateKey;
-        use irc_at_sdk::did::{self, DidResolver};
+        use freeq_sdk::crypto::PrivateKey;
+        use freeq_sdk::did::{self, DidResolver};
         use std::collections::HashMap;
 
         let private_key = PrivateKey::generate_secp256k1();
@@ -467,8 +467,8 @@ mod tests {
 
     #[tokio::test]
     async fn verify_fails_with_wrong_key() {
-        use irc_at_sdk::crypto::PrivateKey;
-        use irc_at_sdk::did::{self, DidResolver};
+        use freeq_sdk::crypto::PrivateKey;
+        use freeq_sdk::did::{self, DidResolver};
         use std::collections::HashMap;
 
         let doc_key = PrivateKey::generate_secp256k1();

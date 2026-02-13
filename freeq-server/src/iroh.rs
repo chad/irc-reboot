@@ -20,7 +20,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::server::SharedState;
 
 /// ALPN protocol identifier for IRC-over-iroh.
-pub const ALPN: &[u8] = b"irc-reboot/iroh/1";
+pub const ALPN: &[u8] = b"freeq/iroh/1";
 
 /// Handle an accepted iroh connection.
 ///

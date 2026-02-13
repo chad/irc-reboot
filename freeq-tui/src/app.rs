@@ -88,7 +88,7 @@ pub struct MediaUploader {
     pub did: String,
     pub pds_url: String,
     pub access_token: String,
-    pub dpop_key: Option<irc_at_sdk::oauth::DpopKey>,
+    pub dpop_key: Option<freeq_sdk::oauth::DpopKey>,
     pub dpop_nonce: Option<String>,
 }
 
@@ -181,9 +181,9 @@ pub struct App {
     /// Show raw IRC lines in the status buffer (toggled by /debug).
     pub debug_raw: bool,
     /// P2P direct messaging handle (None if P2P not started).
-    pub p2p_handle: Option<irc_at_sdk::p2p::P2pHandle>,
+    pub p2p_handle: Option<freeq_sdk::p2p::P2pHandle>,
     /// P2P event receiver (moved to main loop on first use).
-    pub p2p_event_rx: Option<tokio::sync::mpsc::Receiver<irc_at_sdk::p2p::P2pEvent>>,
+    pub p2p_event_rx: Option<tokio::sync::mpsc::Receiver<freeq_sdk::p2p::P2pEvent>>,
 }
 
 /// Results from background tasks that need to update the UI.
@@ -198,7 +198,7 @@ impl App {
         let mut buffers = BTreeMap::new();
         let mut status = Buffer::new("status");
         let mode_name = if vi_mode { "vi" } else { "emacs" };
-        status.push_system(&format!("Welcome to irc-at-tui ({mode_name} mode). Type /help for commands."));
+        status.push_system(&format!("Welcome to freeq ({mode_name} mode). Type /help for commands."));
         buffers.insert("status".to_string(), status);
 
         let mode = if vi_mode { Mode::Vi } else { Mode::Emacs };

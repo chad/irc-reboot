@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-    "irc-server",
-    "irc-at-sdk",
-    "irc-at-tui",
+    "freeq-server",
+    "freeq-sdk",
+    "freeq-tui",
 ]
 
 [workspace.package]

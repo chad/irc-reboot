@@ -32,7 +32,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
 /// ALPN for peer-to-peer IRC DMs.
-pub const P2P_ALPN: &[u8] = b"irc-reboot/p2p-dm/1";
+pub const P2P_ALPN: &[u8] = b"freeq/p2p-dm/1";
 
 /// Events from the P2P subsystem.
 #[derive(Debug, Clone)]

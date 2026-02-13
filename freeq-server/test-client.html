@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>irc-reboot</title>
+<title>freeq</title>
 <style>
   :root {
     --bg: #1e1e2e;
@@ -216,7 +216,7 @@
 <!-- Connect -->
 <div id="connect-screen">
   <div class="connect-box">
-    <h1>irc-reboot</h1>
+    <h1>freeq</h1>
     <div class="sub">WebSocket IRC Client</div>
     <div class="field">
       <label>Server</label>
@@ -242,7 +242,7 @@
 <!-- App -->
 <div id="app">
   <div class="topbar">
-    <span class="logo">irc-reboot</span>
+    <span class="logo">freeq</span>
     <span id="status-pill" class="pill err">connecting</span>
     <span id="hdr-nick" class="nick"></span>
     <span id="hdr-channel" class="channel-name"></span>
@@ -327,7 +327,7 @@ function doConnect() {
     // Standard IRC registration
     raw('CAP LS 302');
     raw('NICK ' + nick);
-    raw('USER ' + nick + ' 0 * :irc-reboot web client');
+    raw('USER ' + nick + ' 0 * :freeq web client');
   };
 
   ws.onmessage = (e) => {

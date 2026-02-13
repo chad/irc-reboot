@@ -1,8 +1,8 @@
 use clap::Parser;
 
-/// IRC server with AT Protocol SASL authentication.
+/// freeq IRC server with AT Protocol SASL authentication.
 #[derive(Parser, Debug, Clone)]
-#[command(name = "irc-server", version, about)]
+#[command(name = "freeq-server", version, about)]
 pub struct ServerConfig {
     /// Plain TCP listener address.
     #[arg(long, default_value = "127.0.0.1:6667")]
@@ -21,7 +21,7 @@ pub struct ServerConfig {
     pub tls_key: Option<String>,
 
     /// Server name used in IRC messages.
-    #[arg(long, default_value = "irc-reboot")]
+    #[arg(long, default_value = "freeq")]
     pub server_name: String,
 
     /// Challenge validity window in seconds.
@@ -59,7 +59,7 @@ impl Default for ServerConfig {
             tls_listen_addr: "127.0.0.1:6697".to_string(),
             tls_cert: None,
             tls_key: None,
-            server_name: "irc-reboot".to_string(),
+            server_name: "freeq".to_string(),
             challenge_timeout_secs: 60,
             db_path: None,
             web_addr: None,

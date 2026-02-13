@@ -1,5 +1,5 @@
 [package]
-name = "irc-at-sdk"
+name = "freeq-sdk"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
