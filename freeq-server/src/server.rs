@@ -73,6 +73,8 @@ pub struct RemoteMember {
     pub did: Option<String>,
     /// Resolved AT Protocol handle (e.g. "chadfowler.com").
     pub handle: Option<String>,
+    /// Whether this user is op on their home server.
+    pub is_op: bool,
 }
 
 /// A stored message for channel history replay.
@@ -626,7 +628,7 @@ async fn process_s2s_message(
             })
             .collect();
         for (nick, rm) in &ch.remote_members {
-            let is_op = rm.did.as_ref().is_some_and(|d| {
+            let is_op = rm.is_op || rm.did.as_ref().is_some_and(|d| {
                 ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
             });
             let prefix = if is_op { "@" } else { "" };
@@ -660,6 +662,35 @@ async fn process_s2s_message(
             let line = format!(":{from} PRIVMSG {target} :{text}\r\n");
 
             if target.starts_with('#') || target.starts_with('&') {
+                // Enforce +n and +m on incoming S2S messages
+                let channel_key = target.to_lowercase();
+                let channels = state.channels.lock().unwrap();
+                if let Some(ch) = channels.get(&channel_key) {
+                    // +n: sender must be a member (local or remote)
+                    if ch.no_ext_msg {
+                        let nick = from.split('!').next().unwrap_or(&from);
+                        let is_member = ch.remote_members.contains_key(nick)
+                            || ch.members.iter().any(|sid| {
+                                state.nick_to_session.lock().unwrap()
+                                    .iter().any(|(n, s)| n == nick && s == sid)
+                            });
+                        if !is_member {
+                            tracing::debug!(channel = %target, from = %from, "S2S PRIVMSG blocked by +n");
+                            return;
+                        }
+                    }
+                    // +m: sender must be op or voiced (check remote member status)
+                    if ch.moderated {
+                        let nick = from.split('!').next().unwrap_or(&from);
+                        let is_privileged = ch.remote_members.get(nick)
+                            .is_some_and(|rm| rm.is_op);
+                        if !is_privileged {
+                            tracing::debug!(channel = %target, from = %from, "S2S PRIVMSG blocked by +m");
+                            return;
+                        }
+                    }
+                }
+                drop(channels);
                 deliver_to_channel(state, &target, &line);
             } else {
                 // PM — find target nick's session
@@ -673,25 +704,19 @@ async fn process_s2s_message(
             }
         }
 
-        S2sMessage::Join { nick, channel, did, handle, origin } => {
+        S2sMessage::Join { nick, channel, did, handle, is_op, origin } => {
             if origin == manager.server_id { return; }
-
-            // Ensure channel exists locally (create if needed, no ops granted)
-            {
-                let mut channels = state.channels.lock().unwrap();
-                channels.entry(channel.clone()).or_default();
-            }
 
             // Track remote member with their identity info
             {
                 let mut channels = state.channels.lock().unwrap();
-                if let Some(ch) = channels.get_mut(&channel) {
-                    ch.remote_members.insert(nick.clone(), RemoteMember {
-                        origin: origin.clone(),
-                        did: did.clone(),
-                        handle: handle.clone(),
-                    });
-                }
+                let ch = channels.entry(channel.clone()).or_default();
+                ch.remote_members.insert(nick.clone(), RemoteMember {
+                    origin: origin.clone(),
+                    did: did.clone(),
+                    handle: handle.clone(),
+                    is_op,
+                });
             }
 
             let line = format!(":{nick}!{nick}@s2s JOIN {channel}\r\n");
@@ -740,17 +765,26 @@ async fn process_s2s_message(
 
         S2sMessage::Topic { channel, topic, set_by, origin } => {
             if origin == manager.server_id { return; }
-            // Respect +t: the remote server should have enforced it,
-            // but if not (old code), we enforce it here too.
-            // We allow the topic change if:
-            //   - Channel doesn't exist yet (will be created)
-            //   - Channel is not +t
-            //   - The set_by user is a known DID-op or founder
-            // Since we can't easily verify remote ops, we trust the
-            // originating server's enforcement and always accept.
+            // Enforce +t locally: if our channel has topic locked, reject
+            // the change unless the setter is a known DID-op or founder.
             {
                 let mut channels = state.channels.lock().unwrap();
                 let ch = channels.entry(channel.clone()).or_default();
+                if ch.topic_locked {
+                    // Check if set_by corresponds to a DID-op or founder.
+                    // We check remote_members for a matching nick with op status.
+                    let is_authorized = ch.remote_members.get(&set_by)
+                        .is_some_and(|rm| rm.is_op || rm.did.as_ref().is_some_and(|d| {
+                            ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
+                        }));
+                    if !is_authorized {
+                        tracing::info!(
+                            channel = %channel, set_by = %set_by,
+                            "Rejecting S2S topic change: channel is +t and setter is not authorized"
+                        );
+                        return;
+                    }
+                }
                 ch.topic = Some(TopicInfo::new(topic.clone(), set_by.clone()));
             }
             let line = format!(":{set_by}!remote@s2s TOPIC {channel} :{topic}\r\n");
@@ -819,14 +853,25 @@ async fn process_s2s_message(
                 let n2s = state.nick_to_session.lock().unwrap();
                 let s2n: HashMap<&String, &String> = n2s.iter().map(|(n, s)| (s, n)).collect();
 
+                let dids = state.session_dids.lock().unwrap();
                 let channel_info: Vec<crate::s2s::ChannelInfo> = channels.iter().map(|(name, ch)| {
                     let nicks: Vec<String> = ch.members.iter()
                         .filter_map(|sid| s2n.get(sid).map(|n| (*n).clone()))
+                        .collect();
+                    let nick_info: Vec<crate::s2s::SyncNick> = ch.members.iter()
+                        .filter_map(|sid| {
+                            s2n.get(sid).map(|n| crate::s2s::SyncNick {
+                                nick: (*n).clone(),
+                                is_op: ch.ops.contains(sid),
+                                did: dids.get(sid).cloned(),
+                            })
+                        })
                         .collect();
                     crate::s2s::ChannelInfo {
                         name: name.clone(),
                         topic: ch.topic.as_ref().map(|t| t.text.clone()),
                         nicks,
+                        nick_info,
                         founder_did: ch.founder_did.clone(),
                         did_ops: ch.did_ops.iter().cloned().collect(),
                         created_at: ch.created_at,
@@ -868,13 +913,25 @@ async fn process_s2s_message(
                     }
 
                     // Add remote nicks
-                    for nick in &info.nicks {
-                        // SyncResponse doesn't include per-user DIDs/handles yet
-                        ch.remote_members.entry(nick.clone()).or_insert_with(|| RemoteMember {
-                            origin: peer_id.clone(),
-                            did: None,
-                            handle: None,
-                        });
+                    // Use rich nick_info if available (new servers), fall back to plain nicks
+                    if !info.nick_info.is_empty() {
+                        for ni in &info.nick_info {
+                            ch.remote_members.entry(ni.nick.clone()).or_insert_with(|| RemoteMember {
+                                origin: peer_id.clone(),
+                                did: ni.did.clone(),
+                                handle: None,
+                                is_op: ni.is_op,
+                            });
+                        }
+                    } else {
+                        for nick in &info.nicks {
+                            ch.remote_members.entry(nick.clone()).or_insert_with(|| RemoteMember {
+                                origin: peer_id.clone(),
+                                did: None,
+                                handle: None,
+                                is_op: false,
+                            });
+                        }
                     }
 
                     // Merge topic if we don't have one
@@ -887,13 +944,15 @@ async fn process_s2s_message(
                         }
                     }
 
-                    // Merge modes: if the remote has a restrictive mode set, adopt it.
-                    // This ensures +t/+i/+n/+m propagate across the federation.
-                    if info.topic_locked { ch.topic_locked = true; }
-                    if info.invite_only { ch.invite_only = true; }
-                    if info.no_ext_msg { ch.no_ext_msg = true; }
-                    if info.moderated { ch.moderated = true; }
-                    if ch.key.is_none() && info.key.is_some() {
+                    // Sync modes: adopt the remote server's mode state.
+                    // The remote server is authoritative for modes it reports.
+                    // If there's a conflict (local +t, remote -t), the remote
+                    // wins because it has the most recent view from its users.
+                    ch.topic_locked = info.topic_locked;
+                    ch.invite_only = info.invite_only;
+                    ch.no_ext_msg = info.no_ext_msg;
+                    ch.moderated = info.moderated;
+                    if info.key.is_some() {
                         ch.key = info.key.clone();
                     }
 

@@ -1036,9 +1036,24 @@ fn handle_join(
     let hostmask = conn.hostmask();
     let did = conn.authenticated_did.as_deref();
 
+    // A channel is "new" only if it doesn't exist at all — not locally,
+    // not via S2S. If remote members are present (from S2S sync), the
+    // channel already exists on the federation and the joining user
+    // should NOT get auto-ops (unless they have DID-based authority).
     let is_new_channel = {
         let channels = state.channels.lock().unwrap();
-        !channels.contains_key(channel)
+        match channels.get(channel) {
+            None => true,
+            Some(ch) => {
+                // Channel entry exists but has nobody and no persistent state —
+                // treat as effectively new (e.g. leftover from cleanup)
+                ch.members.is_empty()
+                    && ch.remote_members.is_empty()
+                    && ch.founder_did.is_none()
+                    && ch.topic.is_none()
+                    && ch.ops.is_empty()
+            }
+        }
     };
 
     if !is_new_channel {
@@ -1147,11 +1162,16 @@ fn handle_join(
     let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
     // Look up AT handle for the joining user
     let handle = state.session_handles.lock().unwrap().get(session_id).cloned();
+    let user_is_op = state.channels.lock().unwrap()
+        .get(channel)
+        .map(|ch| ch.ops.contains(session_id))
+        .unwrap_or(false);
     s2s_broadcast(state, crate::s2s::S2sMessage::Join {
         nick: nick.to_string(),
         channel: channel.to_string(),
         did: did.map(|d| d.to_string()),
         handle,
+        is_op: user_is_op,
         origin: origin.clone(),
     });
 
@@ -1273,11 +1293,11 @@ fn handle_join(
                 })
             })
             .collect();
-        // Remote members from S2S peers (with @ prefix if they have DID-based ops)
+        // Remote members from S2S peers (with @ prefix if op on home server or DID-based)
         let channels_lock = state.channels.lock().unwrap();
         let ch_state = channels_lock.get(channel);
         for (nick, rm) in &remote_members {
-            let is_op = rm.did.as_ref().is_some_and(|d| {
+            let is_op = rm.is_op || rm.did.as_ref().is_some_and(|d| {
                 ch_state.is_some_and(|ch| {
                     ch.founder_did.as_deref() == Some(d.as_str()) || ch.did_ops.contains(d)
                 })
@@ -2104,7 +2124,7 @@ fn handle_names(
         let channels_lock = state.channels.lock().unwrap();
         let ch_state = channels_lock.get(channel);
         for (nick, rm) in &remote_members {
-            let is_op = rm.did.as_ref().is_some_and(|d| {
+            let is_op = rm.is_op || rm.did.as_ref().is_some_and(|d| {
                 ch_state.is_some_and(|ch| {
                     ch.founder_did.as_deref() == Some(d.as_str()) || ch.did_ops.contains(d)
                 })

@@ -405,6 +405,11 @@ async fn run_app(
                     }
                     EditAction::Quit => {
                         let _ = handle.quit(Some("bye")).await;
+                        // Give the background writer task time to flush QUIT to the server.
+                        // Without this, the process exits before the TCP write completes
+                        // and the server never sees the QUIT — leaving a ghost session
+                        // until ping timeout.
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                         app.should_quit = true;
                     }
                     EditAction::None => {}
@@ -1062,6 +1067,7 @@ async fn process_input(
                 handle
                     .quit(Some(if arg.is_empty() { "bye" } else { arg }))
                     .await?;
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                 app.should_quit = true;
             }
             "/raw" => {

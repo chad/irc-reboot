@@ -64,6 +64,9 @@ pub enum S2sMessage {
         did: Option<String>,
         /// Resolved AT Protocol handle (e.g. "chadfowler.com").
         handle: Option<String>,
+        /// Whether this user is an operator on their home server.
+        #[serde(default)]
+        is_op: bool,
         origin: String,
     },
 
@@ -137,12 +140,26 @@ pub enum S2sMessage {
     },
 }
 
+/// Per-user info in a channel sync.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncNick {
+    pub nick: String,
+    #[serde(default)]
+    pub is_op: bool,
+    pub did: Option<String>,
+}
+
 /// Channel info for sync.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelInfo {
     pub name: String,
     pub topic: Option<String>,
+    /// Legacy field: plain nick list (for backward compat with old servers).
+    #[serde(default)]
     pub nicks: Vec<String>,
+    /// Rich nick list with per-user metadata (preferred over `nicks`).
+    #[serde(default)]
+    pub nick_info: Vec<SyncNick>,
     /// Channel founder DID.
     pub founder_did: Option<String>,
     /// DIDs with persistent operator status.
