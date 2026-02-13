@@ -442,6 +442,14 @@ where
                     );
                 }
             }
+            "NAMES" => {
+                if !conn.registered {
+                    continue;
+                }
+                if let Some(channel) = msg.params.first() {
+                    handle_names(&conn, channel, &state, &server_name, &session_id, &send);
+                }
+            }
             "WHOIS" => {
                 if !conn.registered {
                     continue;
@@ -1762,6 +1770,70 @@ fn handle_part(
         channel: channel.to_string(),
         origin,
     });
+}
+
+fn handle_names(
+    conn: &Connection,
+    channel: &str,
+    state: &Arc<SharedState>,
+    server_name: &str,
+    session_id: &str,
+    send: &impl Fn(&Arc<SharedState>, &str, String),
+) {
+    let nick = conn.nick_or_star();
+
+    let nick_list: Vec<String> = {
+        let channels = state.channels.lock().unwrap();
+        let (member_sessions, remote_members, ops, voiced) = match channels.get(channel) {
+            Some(ch) => (ch.members.clone(), ch.remote_members.clone(), ch.ops.clone(), ch.voiced.clone()),
+            None => Default::default(),
+        };
+        drop(channels);
+        let nicks = state.nick_to_session.lock().unwrap();
+        let reverse: std::collections::HashMap<&String, &String> =
+            nicks.iter().map(|(n, s)| (s, n)).collect();
+        let mut list: Vec<String> = member_sessions
+            .iter()
+            .filter_map(|s| {
+                reverse.get(s).map(|n| {
+                    let prefix = if ops.contains(s) {
+                        "@"
+                    } else if voiced.contains(s) {
+                        "+"
+                    } else {
+                        ""
+                    };
+                    format!("{prefix}{n}")
+                })
+            })
+            .collect();
+        let channels_lock = state.channels.lock().unwrap();
+        let ch_state = channels_lock.get(channel);
+        for (nick, rm) in &remote_members {
+            let is_op = rm.did.as_ref().is_some_and(|d| {
+                ch_state.is_some_and(|ch| {
+                    ch.founder_did.as_deref() == Some(d.as_str()) || ch.did_ops.contains(d)
+                })
+            });
+            let prefix = if is_op { "@" } else { "" };
+            list.push(format!("{prefix}{nick}"));
+        }
+        drop(channels_lock);
+        list
+    };
+
+    let names = irc::Message::from_server(
+        server_name,
+        irc::RPL_NAMREPLY,
+        vec![nick, "=", channel, &nick_list.join(" ")],
+    );
+    let end_names = irc::Message::from_server(
+        server_name,
+        irc::RPL_ENDOFNAMES,
+        vec![nick, channel, "End of /NAMES list"],
+    );
+    send(state, session_id, format!("{names}\r\n"));
+    send(state, session_id, format!("{end_names}\r\n"));
 }
 
 fn handle_whois(
