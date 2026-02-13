@@ -37,7 +37,7 @@ open = "5"
 dirs = "5"
 rusqlite = { version = "0.38", features = ["bundled"] }
 axum = { version = "0.8", features = ["ws"] }
-tower-http = { version = "0.6", features = ["cors"] }
+tower-http = { version = "0.6", features = ["cors", "fs"] }
 aes-gcm = "0.10"
 hkdf = "0.12"
 iroh = "0.96"

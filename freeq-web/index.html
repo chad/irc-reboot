@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>freeq</title>
+<style>
+  :root {
+    --bg: #1e1e2e; --bg2: #181825; --bg3: #11111b;
+    --surface: #313244; --overlay: #45475a;
+    --fg: #cdd6f4; --fg2: #a6adc8; --fg3: #6c7086;
+    --red: #f38ba8; --green: #a6e3a1; --yellow: #f9e2af;
+    --blue: #89b4fa; --mauve: #cba6f7; --teal: #94e2d5;
+    --pink: #f5c2e7; --peach: #fab387; --sky: #89dceb;
+    --font: 'SF Mono','Menlo','Consolas','Liberation Mono',monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: var(--font); font-size: 13px; background: var(--bg);
+    color: var(--fg); height: 100vh; height: 100dvh;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--overlay); border-radius: 3px; }
+
+  /* ── Connect screen ── */
+  #connect-screen {
+    display: flex; flex: 1; align-items: center; justify-content: center;
+    background: var(--bg3);
+  }
+  .connect-box {
+    background: var(--bg); border: 1px solid var(--surface);
+    border-radius: 8px; padding: 32px; width: 420px; max-width: 95vw;
+  }
+  .connect-box h1 { font-size: 22px; color: var(--blue); text-align: center; margin-bottom: 2px; }
+  .connect-box .sub { text-align: center; color: var(--fg3); font-size: 11px; margin-bottom: 20px; }
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .8px; color: var(--fg3); margin-bottom: 4px; }
+  .field input { width: 100%; background: var(--bg3); border: 1px solid var(--surface); border-radius: 4px; color: var(--fg); font-family: var(--font); font-size: 13px; padding: 8px 10px; outline: none; }
+  .field input:focus { border-color: var(--blue); }
+  .field input::placeholder { color: var(--fg3); }
+  .field-row { display: flex; gap: 12px; }
+  .field-row .field { flex: 1; }
+  .section-label { font-size: 10px; color: var(--fg3); text-transform: uppercase; letter-spacing: .8px; margin: 16px 0 8px; padding-top: 12px; border-top: 1px solid var(--surface); }
+  .connect-box button { width: 100%; background: var(--blue); color: var(--bg3); border: none; border-radius: 4px; font-family: var(--font); font-size: 13px; font-weight: 700; padding: 10px; cursor: pointer; margin-top: 12px; }
+  .connect-box button:hover { opacity: .9; }
+  #connect-error { color: var(--red); font-size: 12px; text-align: center; margin-top: 8px; min-height: 18px; }
+
+  /* ── Main layout ── */
+  #app { display: none; flex-direction: column; flex: 1; min-height: 0; }
+  #app.active { display: flex; }
+
+  /* ── Header ── */
+  .topbar { background: var(--bg2); border-bottom: 1px solid var(--surface); padding: 6px 12px; display: flex; align-items: center; gap: 10px; flex-shrink: 0; height: 36px; }
+  .topbar .logo { color: var(--blue); font-weight: 700; font-size: 13px; }
+  .pill { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+  .pill.ok { background: #1e3a2f; color: var(--green); }
+  .pill.warn { background: #3a3a1e; color: var(--yellow); }
+  .pill.err { background: #3a1e2f; color: var(--red); }
+  .pill.auth { background: #1e2a3a; color: var(--mauve); }
+  .topbar .nick { color: var(--mauve); font-weight: 600; font-size: 12px; }
+  .topbar .topic-text { color: var(--fg3); font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .topbar .btn { background: none; border: 1px solid var(--surface); color: var(--fg3); font-family: var(--font); font-size: 10px; padding: 2px 8px; border-radius: 3px; cursor: pointer; }
+  .topbar .btn:hover { border-color: var(--fg3); color: var(--fg); }
+  .topbar .btn.danger:hover { border-color: var(--red); color: var(--red); }
+
+  /* ── Body ── */
+  .body { display: flex; flex: 1; min-height: 0; }
+
+  /* ── Sidebar ── */
+  .sidebar { width: 180px; background: var(--bg2); border-right: 1px solid var(--surface); display: flex; flex-direction: column; flex-shrink: 0; overflow-y: auto; }
+  .sidebar .heading { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: var(--fg3); padding: 10px 10px 4px; }
+  .sidebar .item { display: flex; align-items: center; padding: 3px 10px; cursor: pointer; color: var(--fg2); font-size: 12px; border-left: 2px solid transparent; }
+  .sidebar .item:hover { background: var(--surface); }
+  .sidebar .item.active { background: var(--surface); color: var(--blue); border-left-color: var(--blue); }
+  .sidebar .item .badge { margin-left: auto; background: var(--red); color: var(--bg); font-size: 9px; padding: 1px 5px; border-radius: 8px; font-weight: 700; min-width: 16px; text-align: center; }
+
+  /* ── Messages ── */
+  .center { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .messages { flex: 1; overflow-y: auto; padding: 8px 0; display: flex; flex-direction: column; }
+  .msg { padding: 1px 16px; line-height: 1.45; word-wrap: break-word; display: flex; gap: 8px; }
+  .msg:hover { background: rgba(255,255,255,.02); }
+  .msg .ts { color: var(--fg3); font-size: 10px; flex-shrink: 0; width: 38px; text-align: right; padding-top: 2px; }
+  .msg .nick { font-weight: 600; flex-shrink: 0; }
+  .msg .text { flex: 1; min-width: 0; }
+  .msg .text a { color: var(--blue); text-decoration: none; }
+  .msg .text a:hover { text-decoration: underline; }
+  .msg.action .text { font-style: italic; color: var(--fg2); }
+  .msg.system { opacity: .6; }
+  .msg.system .text { color: var(--fg3); font-style: italic; }
+  .msg.error .text { color: var(--red); }
+  .msg.server .text { color: var(--teal); }
+  .msg.self .nick { color: var(--mauve) !important; }
+  .msg.history { opacity: .7; }
+  .msg .day-sep { width: 100%; text-align: center; color: var(--fg3); font-size: 10px; padding: 6px 0 2px; }
+
+  /* ── Input ── */
+  .inputbar { display: flex; border-top: 1px solid var(--surface); background: var(--bg2); flex-shrink: 0; }
+  .inputbar input { flex: 1; background: transparent; border: none; color: var(--fg); font-family: var(--font); font-size: 13px; padding: 10px 16px; outline: none; }
+  .inputbar input::placeholder { color: var(--fg3); }
+
+  /* ── Nicklist ── */
+  .nicklist { width: 160px; background: var(--bg2); border-left: 1px solid var(--surface); overflow-y: auto; flex-shrink: 0; }
+  .nicklist .heading { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: var(--fg3); padding: 10px 10px 4px; }
+  .nicklist .nick-item { padding: 2px 10px; font-size: 12px; color: var(--fg2); cursor: default; }
+  .nicklist .nick-item .prefix { font-weight: 700; }
+  .nicklist .nick-item .prefix.op { color: var(--green); }
+  .nicklist .nick-item .prefix.voice { color: var(--yellow); }
+
+  /* ── Mobile ── */
+  @media (max-width: 700px) {
+    .sidebar { width: 140px; }
+    .nicklist { display: none; }
+    .msg .ts { display: none; }
+  }
+  @media (max-width: 480px) {
+    .sidebar { display: none; }
+    .topbar .topic-text { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Connect -->
+<div id="connect-screen">
+  <div class="connect-box">
+    <h1>freeq</h1>
+    <div class="sub">IRC · AT Protocol · E2EE</div>
+    <div class="field">
+      <label>Server</label>
+      <input id="f-server" placeholder="ws://host:port/irc">
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>Nickname</label>
+        <input id="f-nick" placeholder="nickname">
+      </div>
+      <div class="field">
+        <label>Channels</label>
+        <input id="f-channels" value="#freeq" placeholder="#chan1, #chan2">
+      </div>
+    </div>
+    <div class="section-label">AT Protocol Authentication (optional)</div>
+    <div class="field-row">
+      <div class="field">
+        <label>Handle or DID</label>
+        <input id="f-at-handle" placeholder="you.bsky.social">
+      </div>
+      <div class="field">
+        <label>App Password</label>
+        <input id="f-at-password" type="password" placeholder="xxxx-xxxx-xxxx-xxxx">
+      </div>
+    </div>
+    <button onclick="doConnect()">Connect</button>
+    <div id="connect-error"></div>
+  </div>
+</div>
+
+<!-- App -->
+<div id="app">
+  <div class="topbar">
+    <span class="logo">freeq</span>
+    <span id="status-pill" class="pill err">connecting</span>
+    <span id="auth-pill" class="pill auth" style="display:none"></span>
+    <span id="hdr-nick" class="nick"></span>
+    <span id="hdr-topic" class="topic-text"></span>
+    <button class="btn" onclick="toggleNicklist()">Users</button>
+    <button class="btn danger" onclick="doDisconnect()">Quit</button>
+  </div>
+  <div class="body">
+    <div class="sidebar" id="sidebar"></div>
+    <div class="center">
+      <div class="messages" id="messages"></div>
+      <div class="inputbar">
+        <input id="input" placeholder="Type a message or /command…" autocomplete="off" autofocus
+               onkeydown="handleInputKey(event)">
+      </div>
+    </div>
+    <div class="nicklist" id="nicklist"></div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ── State ────────────────────────────────────────────────────────
+
+let ws = null, nick = '', registered = false;
+let atHandle = '', atPassword = '', atDid = '', atAccessJwt = '', atPdsUrl = '';
+let capNegotiating = false, wantedCaps = [], ackedCaps = new Set();
+let saslInProgress = false;
+const buffers = {};
+let activeBuffer = 'server';
+let inputHistory = [], historyPos = -1;
+
+function buf(name) {
+  const key = name.toLowerCase();
+  if (!buffers[key]) {
+    buffers[key] = { name, messages: [], users: new Set(), topic: '', unread: 0, inBatch: false, batchMsgs: [] };
+    renderSidebar();
+  }
+  return buffers[key];
+}
+
+// ── Connect ──────────────────────────────────────────────────────
+
+async function doConnect() {
+  const url = document.getElementById('f-server').value.trim();
+  nick = document.getElementById('f-nick').value.trim() || 'web' + Math.floor(Math.random() * 99999);
+  atHandle = document.getElementById('f-at-handle').value.trim();
+  atPassword = document.getElementById('f-at-password').value.trim();
+
+  if (!url) { showErr('Enter a WebSocket URL'); return; }
+  showErr('Connecting…');
+
+  // If AT auth requested, resolve handle and create session first
+  if (atHandle && atPassword) {
+    try {
+      await resolveAtIdentity();
+    } catch (e) {
+      showErr('AT auth failed: ' + e.message);
+      return;
+    }
+  }
+
+  try { ws = new WebSocket(url); } catch(e) { showErr('Bad URL: ' + e.message); return; }
+
+  ws.onopen = () => {
+    document.getElementById('connect-screen').style.display = 'none';
+    document.getElementById('app').classList.add('active');
+    setStatus('ok', 'connected');
+    document.getElementById('hdr-nick').textContent = nick;
+    buf('server');
+    switchBuffer('server');
+    sysMsg('server', 'Connecting to ' + url);
+
+    // IRC registration with CAP negotiation
+    raw('CAP LS 302');
+    raw('NICK ' + nick);
+    raw('USER ' + nick + ' 0 * :freeq web client');
+  };
+
+  ws.onmessage = (e) => {
+    e.data.split('\n').forEach(line => { if (line.trim()) handleLine(line.replace(/\r$/, '')); });
+  };
+
+  ws.onclose = () => {
+    setStatus('err', 'disconnected');
+    sysMsg('server', 'Connection closed');
+    registered = false;
+  };
+
+  ws.onerror = () => {
+    if (!registered) showErr('Connection failed. Is the server running with --web-addr?');
+  };
+}
+
+function doDisconnect() {
+  if (ws) { raw('QUIT :Leaving'); ws.close(); ws = null; }
+  document.getElementById('app').classList.remove('active');
+  document.getElementById('connect-screen').style.display = '';
+  showErr('');
+  Object.keys(buffers).forEach(k => delete buffers[k]);
+  registered = false;
+  activeBuffer = 'server';
+  ackedCaps.clear();
+}
+
+function showErr(t) { document.getElementById('connect-error').textContent = t; }
+
+// ── AT Protocol Identity ─────────────────────────────────────────
+
+async function resolveAtIdentity() {
+  // Resolve handle → DID
+  let did = atHandle;
+  if (!did.startsWith('did:')) {
+    const r = await fetch('https://' + atHandle + '/.well-known/atproto-did');
+    if (!r.ok) throw new Error('Could not resolve handle: ' + atHandle);
+    did = (await r.text()).trim();
+  }
+  atDid = did;
+
+  // Resolve DID → PDS
+  const didDoc = await (await fetch('https://plc.directory/' + did)).json();
+  const pdsService = (didDoc.service || []).find(s => s.type === 'AtprotoPersonalDataServer');
+  if (!pdsService) throw new Error('No PDS found in DID document');
+  atPdsUrl = pdsService.serviceEndpoint.replace(/\/$/, '');
+
+  // Create session (app password)
+  const sessResp = await fetch(atPdsUrl + '/xrpc/com.atproto.server.createSession', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ identifier: atHandle, password: atPassword }),
+  });
+  if (!sessResp.ok) throw new Error('PDS login failed: ' + (await sessResp.text()));
+  const sess = await sessResp.json();
+  atAccessJwt = sess.accessJwt;
+  atDid = sess.did;
+  sysMsg('server', 'AT Protocol identity: ' + atDid);
+}
+
+// ── IRC send ─────────────────────────────────────────────────────
+
+function raw(line) {
+  if (!ws || ws.readyState !== 1) return;
+  ws.send(line);
+}
+
+// ── IRC parser ───────────────────────────────────────────────────
+
+function parse(line) {
+  let tags = {}, pos = 0;
+  if (line[0] === '@') {
+    const sp = line.indexOf(' ');
+    line.substring(1, sp).split(';').forEach(t => {
+      const eq = t.indexOf('=');
+      tags[eq >= 0 ? t.slice(0, eq) : t] = eq >= 0 ? t.slice(eq + 1).replace(/\\s/g,' ').replace(/\\:/g,';').replace(/\\\\/g,'\\') : '';
+    });
+    line = line.slice(sp + 1).trimStart();
+  }
+  let prefix = '';
+  if (line[0] === ':') { const sp = line.indexOf(' '); prefix = line.slice(1, sp); line = line.slice(sp + 1); }
+  const params = [];
+  while (line.length) {
+    if (line[0] === ':') { params.push(line.slice(1)); break; }
+    const sp = line.indexOf(' ');
+    if (sp < 0) { params.push(line); break; }
+    params.push(line.slice(0, sp));
+    line = line.slice(sp + 1);
+  }
+  return { tags, prefix, command: (params.shift() || '').toUpperCase(), params };
+}
+
+function pnick(prefix) { const i = prefix.indexOf('!'); return i > 0 ? prefix.slice(0, i) : prefix; }
+
+// ── Handle IRC line ──────────────────────────────────────────────
+
+// Active batch tracking
+const batches = {}; // batchId -> { type, target, messages[] }
+
+function handleLine(rawLine) {
+  const m = parse(rawLine);
+  const p = m.params, from = pnick(m.prefix);
+
+  // Time from server-time tag
+  const serverTime = m.tags.time ? new Date(m.tags.time) : null;
+  const batchId = m.tags.batch || null;
+  const isHistorical = !!batchId;
+
+  switch (m.command) {
+
+    // ── CAP ──
+    case 'CAP': {
+      const sub = (p[1] || '').toUpperCase();
+      if (sub === 'LS') {
+        const available = p.slice(2).join(' ');
+        wantedCaps = [];
+        ['message-tags', 'server-time', 'batch', 'multi-prefix', 'echo-message',
+         'draft/chathistory', 'account-notify', 'extended-join'].forEach(c => {
+          if (available.includes(c)) wantedCaps.push(c);
+        });
+        if (atAccessJwt && available.includes('sasl')) wantedCaps.push('sasl');
+        if (wantedCaps.length) raw('CAP REQ :' + wantedCaps.join(' '));
+        else raw('CAP END');
+      } else if (sub === 'ACK') {
+        p.slice(2).join(' ').split(' ').forEach(c => ackedCaps.add(c));
+        sysMsg('server', 'Capabilities: ' + [...ackedCaps].join(' '));
+        if (ackedCaps.has('sasl') && atAccessJwt) {
+          saslInProgress = true;
+          raw('AUTHENTICATE ATPROTO-CHALLENGE');
+        } else {
+          raw('CAP END');
+        }
+      } else if (sub === 'NAK') {
+        raw('CAP END');
+      }
+      break;
+    }
+
+    // ── SASL ──
+    case 'AUTHENTICATE': {
+      if (p[0] === '+' && saslInProgress && atAccessJwt) {
+        // Server sent challenge. Build pds-session response.
+        const challengeB64 = p[0] === '+' ? '' : p[0];
+        // For pds-session, we send: did\0method\0token\0pds_url
+        const payload = atDid + '\0pds-session\0' + atAccessJwt + '\0' + atPdsUrl;
+        const encoded = btoa(payload);
+        // Send in 400-byte chunks
+        for (let i = 0; i < encoded.length; i += 400) {
+          raw('AUTHENTICATE ' + encoded.slice(i, i + 400));
+        }
+        if (encoded.length % 400 === 0) raw('AUTHENTICATE +');
+      }
+      break;
+    }
+    case '900': { // RPL_LOGGEDIN
+      sysMsg('server', p[p.length - 1]);
+      document.getElementById('auth-pill').style.display = '';
+      document.getElementById('auth-pill').textContent = atDid.slice(0, 20) + '…';
+      break;
+    }
+    case '903': sysMsg('server', '✓ SASL authentication successful'); saslInProgress = false; raw('CAP END'); break;
+    case '904': sysMsg('server', '✗ SASL authentication failed'); saslInProgress = false; raw('CAP END'); break;
+
+    // ── BATCH ──
+    case 'BATCH': {
+      const ref = p[0];
+      if (ref.startsWith('+')) {
+        const id = ref.slice(1);
+        batches[id] = { type: p[1] || '', target: p[2] || '', messages: [] };
+      } else if (ref.startsWith('-')) {
+        const id = ref.slice(1);
+        const batch = batches[id];
+        if (batch) {
+          // Replay batch messages
+          batch.messages.forEach(msg => {
+            addMsg(msg.buffer, msg.time, msg.sender, msg.text, msg.cls + ' history');
+          });
+          delete batches[id];
+        }
+      }
+      break;
+    }
+
+    case 'PING': raw('PONG :' + (p[0] || '')); break;
+
+    // ── Registration ──
+    case '001':
+      registered = true; nick = p[0] || nick;
+      document.getElementById('hdr-nick').textContent = nick;
+      sysMsg('server', p[1] || 'Welcome!');
+      document.getElementById('f-channels').value.split(',').map(s => s.trim()).filter(Boolean).forEach(ch => raw('JOIN ' + ch));
+      break;
+    case '002': case '003': case '004': case '005':
+      sysMsg('server', p.slice(1).join(' ')); break;
+    case '375': case '372': sysMsg('server', p[p.length - 1]); break;
+    case '376': break;
+
+    case '433': nick += '_'; raw('NICK ' + nick); document.getElementById('hdr-nick').textContent = nick; break;
+
+    case 'NICK': {
+      const newNick = p[0];
+      if (from === nick) { nick = newNick; document.getElementById('hdr-nick').textContent = nick; }
+      for (const b of Object.values(buffers)) {
+        for (const pfx of ['', '@', '+']) {
+          if (b.users.has(pfx + from)) { b.users.delete(pfx + from); b.users.add(pfx + newNick); }
+        }
+      }
+      renderNicklist();
+      break;
+    }
+
+    // ── JOIN ──
+    case 'JOIN': {
+      const chan = p[0];
+      // extended-join: JOIN #channel account :realname
+      const account = p[1] || null;
+      if (from === nick) {
+        buf(chan); switchBuffer(chan);
+        sysMsg(chan, 'You joined ' + chan);
+      } else {
+        buf(chan).users.add(from);
+        const extra = account && account !== '*' ? ' (' + account + ')' : '';
+        sysMsg(chan, from + extra + ' joined');
+      }
+      renderNicklist();
+      break;
+    }
+
+    case 'PART': {
+      const chan = p[0], reason = p[1] || '';
+      if (from === nick) {
+        sysMsg(chan, 'You left ' + chan);
+        delete buffers[chan.toLowerCase()];
+        if (activeBuffer === chan.toLowerCase()) switchBuffer('server');
+        renderSidebar();
+      } else {
+        rmUser(chan, from);
+        sysMsg(chan, from + ' left' + (reason ? ' (' + reason + ')' : ''));
+      }
+      renderNicklist();
+      break;
+    }
+
+    case 'QUIT': {
+      const reason = p[0] || '';
+      for (const [, b] of Object.entries(buffers)) {
+        if (hasUser(b, from)) {
+          rmUserFromBuf(b, from);
+          pushBufMsg(b, null, '←', from + ' quit' + (reason ? ' (' + reason + ')' : ''), 'system');
+        }
+      }
+      renderNicklist();
+      break;
+    }
+
+    case 'KICK': {
+      const chan = p[0], kicked = p[1], reason = p[2] || '';
+      if (kicked === nick) {
+        pushChanMsg(chan, null, '!', 'Kicked by ' + from + (reason ? ': ' + reason : ''), 'error');
+        delete buffers[chan.toLowerCase()];
+        if (activeBuffer === chan.toLowerCase()) switchBuffer('server');
+        renderSidebar();
+      } else {
+        rmUser(chan, kicked);
+        sysMsg(chan, kicked + ' kicked by ' + from + (reason ? ' (' + reason + ')' : ''));
+      }
+      renderNicklist();
+      break;
+    }
+
+    // ── PRIVMSG / NOTICE ──
+    case 'PRIVMSG': {
+      const target = p[0], text = p[1] || '';
+      const isAction = text.startsWith('\x01ACTION ') && text.endsWith('\x01');
+      const bufName = (target.startsWith('#') || target.startsWith('&')) ? target : from;
+      buf(bufName);
+      const time = serverTime;
+
+      if (batchId && batches[batchId]) {
+        // Accumulate in batch
+        const cls = isAction ? 'action' : (from === nick ? 'self' : '');
+        const msgText = isAction ? text.slice(8, -1) : text;
+        batches[batchId].messages.push({ buffer: bufName.toLowerCase(), time, sender: from, text: msgText, cls });
+      } else if (isAction) {
+        addMsg(bufName, time, from, text.slice(8, -1), 'action');
+      } else {
+        addMsg(bufName, time, from, text, from === nick ? 'self' : '');
+      }
+      break;
+    }
+
+    case 'NOTICE': {
+      const target = p[0], text = p[1] || '';
+      const b = (target === '*' || target === nick) ? 'server' : target;
+      addMsg(b, serverTime, from || 'server', text, 'server');
+      break;
+    }
+
+    // ── TOPIC ──
+    case 'TOPIC': {
+      const chan = p[0], text = p[1] || '';
+      buf(chan).topic = text;
+      sysMsg(chan, from + ' set topic: ' + text);
+      if (activeBuffer === chan.toLowerCase()) document.getElementById('hdr-topic').textContent = text;
+      break;
+    }
+    case '332': {
+      const chan = p[1], text = p[2] || '';
+      buf(chan).topic = text;
+      sysMsg(chan, 'Topic: ' + text);
+      if (activeBuffer === chan.toLowerCase()) document.getElementById('hdr-topic').textContent = text;
+      break;
+    }
+    case '333': break;
+
+    // ── NAMES ──
+    case '353': {
+      const chan = p[2], nicks = (p[3] || '').split(' ').filter(Boolean);
+      const b = buf(chan);
+      nicks.forEach(n => b.users.add(n));
+      renderNicklist();
+      break;
+    }
+    case '366': break;
+
+    // ── MODE ──
+    case 'MODE': {
+      const target = p[0];
+      if (target.startsWith('#') || target.startsWith('&'))
+        sysMsg(target, from + ' set mode ' + p.slice(1).join(' '));
+      break;
+    }
+
+    // ── ACCOUNT ──
+    case 'ACCOUNT': {
+      const account = p[0];
+      // Find channels with this user and notify
+      for (const [, b] of Object.entries(buffers)) {
+        if (hasUser(b, from)) {
+          pushBufMsg(b, null, '*', from + ' is now authenticated as ' + account, 'system');
+        }
+      }
+      break;
+    }
+
+    // ── WHOIS ──
+    case '311': sysMsg('server', 'WHOIS ' + p[1] + ': ' + p[5]); break;
+    case '312': sysMsg('server', '  server: ' + p[2]); break;
+    case '319': sysMsg('server', '  channels: ' + p[2]); break;
+    case '330': sysMsg('server', '  account: ' + p[2]); break;
+    case '671': sysMsg('server', '  ' + p[2]); break;
+    case '318': break;
+
+    // ── Errors ──
+    case '401': sysMsg('server', 'No such nick: ' + p[1]); break;
+    case '473': sysMsg('server', 'Cannot join ' + p[1] + ' (invite only)'); break;
+    case '474': sysMsg('server', 'Cannot join ' + p[1] + ' (banned)'); break;
+    case '475': sysMsg('server', 'Cannot join ' + p[1] + ' (bad key)'); break;
+    case '482': pushChanMsg(p[1], null, '!', p[2] || 'Not operator', 'error'); break;
+
+    case '367': pushChanMsg(p[1], null, '*', 'Ban: ' + p[2], 'system'); break;
+    case '368': break;
+
+    // ── LIST ──
+    case '322': sysMsg('server', '  ' + p[1] + ' (' + p[2] + ') ' + (p[3] || '')); break;
+    case '321': sysMsg('server', 'Channel list:'); break;
+    case '323': break;
+
+    default:
+      if (/^\d{3}$/.test(m.command)) sysMsg('server', '[' + m.command + '] ' + p.slice(1).join(' '));
+  }
+}
+
+// ── User helpers ─────────────────────────────────────────────────
+
+function hasUser(b, n) { return b.users.has(n) || b.users.has('@' + n) || b.users.has('+' + n); }
+function rmUser(chan, n) { rmUserFromBuf(buffers[chan.toLowerCase()], n); }
+function rmUserFromBuf(b, n) { if (!b) return; b.users.delete(n); b.users.delete('@' + n); b.users.delete('+' + n); }
+
+// ── Message helpers ──────────────────────────────────────────────
+
+const COLORS = ['var(--red)','var(--green)','var(--yellow)','var(--blue)','var(--mauve)','var(--teal)','var(--pink)','var(--peach)','var(--sky)'];
+function ncolor(n) { let h = 0; for (let i = 0; i < n.length; i++) h = n.charCodeAt(i) + ((h << 5) - h); return COLORS[Math.abs(h) % COLORS.length]; }
+function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function linkify(s) { return esc(s).replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>'); }
+function timeStr(d) { if (!d) d = new Date(); return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0'); }
+
+function sysMsg(buffer, text) { addMsg(buffer, null, '—', text, 'system'); }
+
+function pushChanMsg(chan, time, sender, text, cls) {
+  const b = buf(chan);
+  pushBufMsg(b, time, sender, text, cls);
+}
+
+function pushBufMsg(b, time, sender, text, cls) {
+  const entry = { time: timeStr(time), sender, text, cls: cls || '' };
+  b.messages.push(entry);
+  if (b.messages.length > 1000) b.messages.shift();
+  if (b === buffers[activeBuffer]) appendEl(entry);
+  else { b.unread++; renderSidebar(); }
+}
+
+function addMsg(buffer, time, sender, text, cls) {
+  const key = buffer.toLowerCase();
+  buf(buffer);
+  pushBufMsg(buffers[key], time, sender, text, cls);
+}
+
+function appendEl(e) {
+  const c = document.getElementById('messages');
+  const atBottom = c.scrollHeight - c.scrollTop - c.clientHeight < 60;
+  const div = document.createElement('div');
+  div.className = 'msg ' + (e.cls || '');
+  const color = e.cls.includes('system') || e.cls.includes('server') || e.cls.includes('error') ? 'var(--fg3)' : ncolor(e.sender);
+  const nickH = e.cls.includes('action') ? '* ' + esc(e.sender) : esc(e.sender);
+  div.innerHTML = '<span class="ts">' + e.time + '</span><span class="nick" style="color:' + color + '">' + nickH + '</span><span class="text">' + linkify(e.text) + '</span>';
+  c.appendChild(div);
+  if (atBottom) c.scrollTop = c.scrollHeight;
+}
+
+// ── Input ────────────────────────────────────────────────────────
+
+function handleInputKey(e) {
+  if (e.key === 'Enter') { sendInput(); e.preventDefault(); }
+  else if (e.key === 'ArrowUp') { historyUp(); e.preventDefault(); }
+  else if (e.key === 'ArrowDown') { historyDown(); e.preventDefault(); }
+  else if (e.key === 'Tab') { tabComplete(); e.preventDefault(); }
+}
+
+function sendInput() {
+  const el = document.getElementById('input');
+  const text = el.value; el.value = '';
+  if (!text) return;
+  inputHistory.push(text); historyPos = -1;
+  if (text.startsWith('/')) { handleCommand(text); return; }
+  if (!activeBuffer || activeBuffer === 'server') { sysMsg('server', 'Select a channel first'); return; }
+  raw('PRIVMSG ' + buffers[activeBuffer].name + ' :' + text);
+  if (!ackedCaps.has('echo-message')) addMsg(activeBuffer, null, nick, text, 'self');
+}
+
+function historyUp() {
+  if (!inputHistory.length) return;
+  if (historyPos < 0) historyPos = inputHistory.length;
+  if (historyPos > 0) historyPos--;
+  document.getElementById('input').value = inputHistory[historyPos] || '';
+}
+
+function historyDown() {
+  if (historyPos < 0) return;
+  historyPos++;
+  document.getElementById('input').value = historyPos >= inputHistory.length ? '' : inputHistory[historyPos];
+  if (historyPos >= inputHistory.length) historyPos = -1;
+}
+
+function tabComplete() {
+  const el = document.getElementById('input');
+  const text = el.value;
+  const word = text.split(' ').pop().toLowerCase();
+  if (!word) return;
+  const b = buffers[activeBuffer];
+  if (!b) return;
+  for (const u of b.users) {
+    const bare = u.replace(/^[@+]/, '');
+    if (bare.toLowerCase().startsWith(word)) {
+      const prefix = text.slice(0, text.length - word.length);
+      el.value = prefix + bare + (prefix ? ' ' : ': ');
+      return;
+    }
+  }
+}
+
+function handleCommand(text) {
+  const sp = text.indexOf(' ');
+  const cmd = (sp > 0 ? text.slice(1, sp) : text.slice(1)).toLowerCase();
+  const args = sp > 0 ? text.slice(sp + 1) : '';
+  const target = activeBuffer !== 'server' ? buffers[activeBuffer]?.name || activeBuffer : '';
+
+  switch (cmd) {
+    case 'join': case 'j':
+      args.split(',').map(s => s.trim()).filter(Boolean).forEach(ch => raw('JOIN ' + ch)); break;
+    case 'part': case 'leave':
+      raw('PART ' + (args || target)); break;
+    case 'nick':
+      if (args) raw('NICK ' + args.split(' ')[0]); break;
+    case 'topic': case 't':
+      raw(args ? 'TOPIC ' + target + ' :' + args : 'TOPIC ' + target); break;
+    case 'kick': case 'k': { const kp = args.split(' '); raw('KICK ' + target + ' ' + kp[0] + ' :' + (kp.slice(1).join(' ') || 'kicked')); break; }
+    case 'mode': case 'm': raw('MODE ' + (args || target)); break;
+    case 'ban': case 'b': raw(args ? 'MODE ' + target + ' +b ' + args : 'MODE ' + target + ' +b'); break;
+    case 'unban': if (args) raw('MODE ' + target + ' -b ' + args); break;
+    case 'op': if (args) raw('MODE ' + target + ' +o ' + args); break;
+    case 'deop': if (args) raw('MODE ' + target + ' -o ' + args); break;
+    case 'voice': if (args) raw('MODE ' + target + ' +v ' + args); break;
+    case 'invite': if (args) raw('INVITE ' + args + ' ' + target); break;
+    case 'msg': case 'query': {
+      const mp = args.split(' '), t = mp[0], mt = mp.slice(1).join(' ');
+      if (t && mt) { raw('PRIVMSG ' + t + ' :' + mt); buf(t); addMsg(t, null, nick, mt, 'self'); }
+      break;
+    }
+    case 'me': case 'action':
+      if (target) { raw('PRIVMSG ' + target + ' :\x01ACTION ' + args + '\x01'); if (!ackedCaps.has('echo-message')) addMsg(activeBuffer, null, nick, args, 'action self'); } break;
+    case 'whois': case 'wi': raw('WHOIS ' + (args || '')); break;
+    case 'list': raw('LIST'); break;
+    case 'names': raw('NAMES ' + (args || target)); break;
+    case 'who': raw('WHO ' + (args || target)); break;
+    case 'history': {
+      const n = args || '50';
+      if (target) raw('CHATHISTORY LATEST ' + target + ' * ' + n);
+      break;
+    }
+    case 'raw': case 'quote': raw(args); break;
+    case 'clear': if (buffers[activeBuffer]) { buffers[activeBuffer].messages = []; renderMessages(); } break;
+    case 'close': case 'wc':
+      if (activeBuffer !== 'server') {
+        if (target.startsWith('#') || target.startsWith('&')) raw('PART ' + target);
+        delete buffers[activeBuffer]; switchBuffer('server'); renderSidebar();
+      } break;
+    case 'quit': case 'q': doDisconnect(); break;
+    case 'help': case 'h':
+      sysMsg('server', 'Commands: /join /part /nick /topic /kick /mode /ban /unban /op /deop /voice /invite /msg /me /whois /list /names /who /history /raw /clear /close /quit');
+      break;
+    default: raw(cmd.toUpperCase() + (args ? ' ' + args : ''));
+  }
+}
+
+// ── Rendering ────────────────────────────────────────────────────
+
+function renderMessages() {
+  const c = document.getElementById('messages');
+  c.innerHTML = '';
+  const b = buffers[activeBuffer];
+  if (b) b.messages.forEach(appendEl);
+  c.scrollTop = c.scrollHeight;
+}
+
+function renderSidebar() {
+  const el = document.getElementById('sidebar');
+  el.innerHTML = '<div class="heading">Buffers</div>';
+  const order = ['server', ...Object.keys(buffers).filter(k => k !== 'server').sort()];
+  order.forEach(key => {
+    const b = buffers[key]; if (!b) return;
+    const item = document.createElement('div');
+    item.className = 'item' + (key === activeBuffer ? ' active' : '');
+    item.textContent = key === 'server' ? '(status)' : b.name;
+    if (b.unread > 0) { const badge = document.createElement('span'); badge.className = 'badge'; badge.textContent = b.unread; item.appendChild(badge); }
+    item.onclick = () => switchBuffer(key);
+    el.appendChild(item);
+  });
+}
+
+function renderNicklist() {
+  const el = document.getElementById('nicklist');
+  el.innerHTML = '';
+  const b = buffers[activeBuffer];
+  if (!b || activeBuffer === 'server') return;
+  el.innerHTML = '<div class="heading">Users (' + b.users.size + ')</div>';
+  const sorted = [...b.users].sort((a, b) => {
+    const wa = a.startsWith('@') ? 0 : a.startsWith('+') ? 1 : 2;
+    const wb = b.startsWith('@') ? 0 : b.startsWith('+') ? 1 : 2;
+    return wa - wb || a.replace(/^[@+]/, '').localeCompare(b.replace(/^[@+]/, ''));
+  });
+  sorted.forEach(u => {
+    const isOp = u.startsWith('@'), isV = u.startsWith('+'), bare = u.replace(/^[@+]/, '');
+    const div = document.createElement('div');
+    div.className = 'nick-item';
+    div.innerHTML = (isOp ? '<span class="prefix op">@</span>' : isV ? '<span class="prefix voice">+</span>' : '') + esc(bare);
+    div.onclick = () => { document.getElementById('input').value = '/whois ' + bare; document.getElementById('input').focus(); };
+    el.appendChild(div);
+  });
+}
+
+function switchBuffer(name) {
+  activeBuffer = name.toLowerCase();
+  const b = buffers[activeBuffer];
+  if (b) b.unread = 0;
+  document.getElementById('hdr-topic').textContent = (b && b.topic) || '';
+  renderMessages(); renderSidebar(); renderNicklist();
+  document.getElementById('input').focus();
+}
+
+function setStatus(cls, text) { const el = document.getElementById('status-pill'); el.className = 'pill ' + cls; el.textContent = text; }
+
+function toggleNicklist() { document.getElementById('nicklist').classList.toggle('hidden'); }
+
+// ── Init ─────────────────────────────────────────────────────────
+
+// Auto-detect server URL from current page
+(function() {
+  const loc = window.location;
+  const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
+  document.getElementById('f-server').value = proto + '//' + loc.host + '/irc';
+  document.getElementById('f-nick').value = 'web' + Math.floor(Math.random() * 99999);
+})();
+</script>
+</body>
+</html>

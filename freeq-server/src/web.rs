@@ -169,7 +169,7 @@ impl AsyncWrite for WsBridge {
 
 /// Build the axum router with WebSocket and REST endpoints.
 pub fn router(state: Arc<SharedState>) -> Router {
-    Router::new()
+    let mut app = Router::new()
         // WebSocket IRC transport
         .route("/irc", get(ws_upgrade))
         // REST API (read-only, v1)
@@ -179,8 +179,23 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/api/v1/channels/{name}/topic", get(api_channel_topic))
         .route("/api/v1/users/{nick}", get(api_user))
         .route("/api/v1/users/{nick}/whois", get(api_user_whois))
-        .layer(CorsLayer::permissive())
-        .with_state(state)
+        .layer(CorsLayer::permissive());
+
+    // Serve static web client files if the directory exists
+    if let Some(ref web_dir) = state.config.web_static_dir {
+        let dir = std::path::PathBuf::from(web_dir);
+        if dir.exists() {
+            tracing::info!("Serving web client from {}", dir.display());
+            app = app.fallback_service(
+                tower_http::services::ServeDir::new(dir)
+                    .append_index_html_on_directories(true)
+            );
+        } else {
+            tracing::warn!("Web static dir not found: {}", dir.display());
+        }
+    }
+
+    app.with_state(state)
 }
 
 // ── WebSocket handler ──────────────────────────────────────────────────

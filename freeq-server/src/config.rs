@@ -70,6 +70,12 @@ pub struct ServerConfig {
     /// Message of the Day text. If not set, no MOTD is sent.
     #[arg(long)]
     pub motd: Option<String>,
+
+    /// Directory containing web client static files (index.html, etc.).
+    /// If set, files are served at the root path (/) of the web listener.
+    /// Typically points to the freeq-web/ directory.
+    #[arg(long)]
+    pub web_static_dir: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -90,6 +96,7 @@ impl Default for ServerConfig {
             data_dir: None,
             max_messages_per_channel: 10000,
             motd: None,
+            web_static_dir: None,
         }
     }
 }
