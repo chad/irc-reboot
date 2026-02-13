@@ -1545,6 +1545,7 @@ fn handle_mode(
                 let hostmask = conn.hostmask();
                 let mode_msg = format!(":{hostmask} MODE {channel} {sign}i\r\n");
                 broadcast_to_channel(state, channel, &mode_msg);
+                s2s_broadcast_mode(state, conn, channel, &format!("{sign}i"), None);
             }
             't' => {
                 {
@@ -1560,6 +1561,7 @@ fn handle_mode(
                 let hostmask = conn.hostmask();
                 let mode_msg = format!(":{hostmask} MODE {channel} {sign}t\r\n");
                 broadcast_to_channel(state, channel, &mode_msg);
+                s2s_broadcast_mode(state, conn, channel, &format!("{sign}t"), None);
             }
             'k' => {
                 if adding {
@@ -1584,6 +1586,7 @@ fn handle_mode(
                     let hostmask = conn.hostmask();
                     let mode_msg = format!(":{hostmask} MODE {channel} +k {key}\r\n");
                     broadcast_to_channel(state, channel, &mode_msg);
+                    s2s_broadcast_mode(state, conn, channel, "+k", Some(key));
                 } else {
                     let old_key = {
                         let mut channels = state.channels.lock().unwrap();
@@ -1601,6 +1604,7 @@ fn handle_mode(
                         let hostmask = conn.hostmask();
                         let mode_msg = format!(":{hostmask} MODE {channel} -k {key}\r\n");
                         broadcast_to_channel(state, channel, &mode_msg);
+                        s2s_broadcast_mode(state, conn, channel, "-k", Some(&key));
                     }
                 }
             }
@@ -1618,6 +1622,7 @@ fn handle_mode(
                 let hostmask = conn.hostmask();
                 let mode_msg = format!(":{hostmask} MODE {channel} {sign}n\r\n");
                 broadcast_to_channel(state, channel, &mode_msg);
+                s2s_broadcast_mode(state, conn, channel, &format!("{sign}n"), None);
             }
             'm' => {
                 {
@@ -1633,6 +1638,7 @@ fn handle_mode(
                 let hostmask = conn.hostmask();
                 let mode_msg = format!(":{hostmask} MODE {channel} {sign}m\r\n");
                 broadcast_to_channel(state, channel, &mode_msg);
+                s2s_broadcast_mode(state, conn, channel, &format!("{sign}m"), None);
             }
             _ => {
                 let mode_char = ch.to_string();
@@ -1841,6 +1847,24 @@ fn s2s_broadcast(state: &Arc<SharedState>, msg: crate::s2s::S2sMessage) {
             manager.broadcast(msg).await;
         });
     }
+}
+
+/// Broadcast a channel mode change to S2S peers.
+fn s2s_broadcast_mode(
+    state: &Arc<SharedState>,
+    conn: &Connection,
+    channel: &str,
+    mode: &str,
+    arg: Option<&str>,
+) {
+    let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+    s2s_broadcast(state, crate::s2s::S2sMessage::Mode {
+        channel: channel.to_string(),
+        mode: mode.to_string(),
+        arg: arg.map(|s| s.to_string()),
+        set_by: conn.nick.as_deref().unwrap_or("*").to_string(),
+        origin,
+    });
 }
 
 fn broadcast_to_channel(state: &Arc<SharedState>, channel: &str, msg: &str) {

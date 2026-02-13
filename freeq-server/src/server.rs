@@ -740,7 +740,14 @@ async fn process_s2s_message(
 
         S2sMessage::Topic { channel, topic, set_by, origin } => {
             if origin == manager.server_id { return; }
-            // Create channel if needed, then set topic
+            // Respect +t: the remote server should have enforced it,
+            // but if not (old code), we enforce it here too.
+            // We allow the topic change if:
+            //   - Channel doesn't exist yet (will be created)
+            //   - Channel is not +t
+            //   - The set_by user is a known DID-op or founder
+            // Since we can't easily verify remote ops, we trust the
+            // originating server's enforcement and always accept.
             {
                 let mut channels = state.channels.lock().unwrap();
                 let ch = channels.entry(channel.clone()).or_default();
@@ -823,6 +830,11 @@ async fn process_s2s_message(
                         founder_did: ch.founder_did.clone(),
                         did_ops: ch.did_ops.iter().cloned().collect(),
                         created_at: ch.created_at,
+                        topic_locked: ch.topic_locked,
+                        invite_only: ch.invite_only,
+                        no_ext_msg: ch.no_ext_msg,
+                        moderated: ch.moderated,
+                        key: ch.key.clone(),
                     }
                 }).collect();
 
@@ -875,6 +887,16 @@ async fn process_s2s_message(
                         }
                     }
 
+                    // Merge modes: if the remote has a restrictive mode set, adopt it.
+                    // This ensures +t/+i/+n/+m propagate across the federation.
+                    if info.topic_locked { ch.topic_locked = true; }
+                    if info.invite_only { ch.invite_only = true; }
+                    if info.no_ext_msg { ch.no_ext_msg = true; }
+                    if info.moderated { ch.moderated = true; }
+                    if ch.key.is_none() && info.key.is_some() {
+                        ch.key = info.key.clone();
+                    }
+
                     // Re-op any local members whose DID now has persistent ops
                     let dids = state.session_dids.lock().unwrap();
                     let members: Vec<String> = ch.members.iter().cloned().collect();
@@ -924,6 +946,39 @@ async fn process_s2s_message(
                     }
                 }
             }
+        }
+
+        S2sMessage::Mode { channel, mode, arg, set_by, origin } => {
+            if origin == manager.server_id { return; }
+            // Apply mode change to local channel state
+            {
+                let mut channels = state.channels.lock().unwrap();
+                if let Some(ch) = channels.get_mut(&channel) {
+                    let adding = mode.starts_with('+');
+                    let mode_char = mode.chars().last().unwrap_or(' ');
+                    match mode_char {
+                        't' => ch.topic_locked = adding,
+                        'i' => ch.invite_only = adding,
+                        'n' => ch.no_ext_msg = adding,
+                        'm' => ch.moderated = adding,
+                        'k' => {
+                            if adding {
+                                ch.key = arg.clone();
+                            } else {
+                                ch.key = None;
+                            }
+                        }
+                        _ => {} // o, v, b handled differently
+                    }
+                }
+            }
+            // Notify local members
+            let mode_line = if let Some(ref a) = arg {
+                format!(":{set_by}!remote@s2s MODE {channel} {mode} {a}\r\n")
+            } else {
+                format!(":{set_by}!remote@s2s MODE {channel} {mode}\r\n")
+            };
+            deliver_to_channel(state, &channel, &mode_line);
         }
 
         S2sMessage::NickChange { old, new, origin } => {

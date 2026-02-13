@@ -113,6 +113,16 @@ pub enum S2sMessage {
         origin: String,
     },
 
+    /// Channel mode changed.
+    #[serde(rename = "mode")]
+    Mode {
+        channel: String,
+        mode: String,
+        arg: Option<String>,
+        set_by: String,
+        origin: String,
+    },
+
     /// Request full state sync (sent on initial link).
     #[serde(rename = "sync_request")]
     SyncRequest,
@@ -139,6 +149,17 @@ pub struct ChannelInfo {
     pub did_ops: Vec<String>,
     /// Channel creation timestamp.
     pub created_at: u64,
+    /// Channel modes: topic_locked, invite_only, no_ext_msg, moderated
+    #[serde(default)]
+    pub topic_locked: bool,
+    #[serde(default)]
+    pub invite_only: bool,
+    #[serde(default)]
+    pub no_ext_msg: bool,
+    #[serde(default)]
+    pub moderated: bool,
+    #[serde(default)]
+    pub key: Option<String>,
 }
 
 /// State for managing S2S links.
