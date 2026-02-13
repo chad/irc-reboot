@@ -537,15 +537,23 @@ function handleLine(rawLine) {
       buf(bufName);
       const time = serverTime;
 
+      // Append media URL from IRCv3 tags if present
+      const mediaUrl = m.tags['media-url'] || '';
+      const mediaAlt = m.tags['media-alt'] || '';
+
       if (batchId && batches[batchId]) {
-        // Accumulate in batch
         const cls = isAction ? 'action' : (from === nick ? 'self' : '');
-        const msgText = isAction ? text.slice(8, -1) : text;
-        batches[batchId].messages.push({ buffer: bufName.toLowerCase(), time, sender: from, text: msgText, cls });
+        let msgText = isAction ? text.slice(8, -1) : text;
+        if (mediaUrl) msgText += (msgText ? ' ' : '') + mediaUrl;
+        batches[batchId].messages.push({ buffer: bufName.toLowerCase(), time, sender: from, text: msgText, cls, mediaUrl, mediaAlt });
       } else if (isAction) {
-        addMsg(bufName, time, from, text.slice(8, -1), 'action');
+        let t = text.slice(8, -1);
+        if (mediaUrl) t += ' ' + mediaUrl;
+        addMsg(bufName, time, from, t, 'action', mediaUrl, mediaAlt);
       } else {
-        addMsg(bufName, time, from, text, from === nick ? 'self' : '');
+        let t = text;
+        if (mediaUrl) t += (t ? ' ' : '') + mediaUrl;
+        addMsg(bufName, time, from, t, from === nick ? 'self' : '', mediaUrl, mediaAlt);
       }
       break;
     }
@@ -672,18 +680,18 @@ function pushChanMsg(chan, time, sender, text, cls) {
   pushBufMsg(b, time, sender, text, cls);
 }
 
-function pushBufMsg(b, time, sender, text, cls) {
-  const entry = { time: timeStr(time), sender, text, cls: cls || '' };
+function pushBufMsg(b, time, sender, text, cls, mediaUrl, mediaAlt) {
+  const entry = { time: timeStr(time), sender, text, cls: cls || '', mediaUrl: mediaUrl || '', mediaAlt: mediaAlt || '' };
   b.messages.push(entry);
   if (b.messages.length > 1000) b.messages.shift();
   if (b === buffers[activeBuffer]) appendEl(entry);
   else { b.unread++; renderSidebar(); }
 }
 
-function addMsg(buffer, time, sender, text, cls) {
+function addMsg(buffer, time, sender, text, cls, mediaUrl, mediaAlt) {
   const key = buffer.toLowerCase();
   buf(buffer);
-  pushBufMsg(buffers[key], time, sender, text, cls);
+  pushBufMsg(buffers[key], time, sender, text, cls, mediaUrl, mediaAlt);
 }
 
 function appendEl(e) {
@@ -693,12 +701,26 @@ function appendEl(e) {
   div.className = 'msg ' + (e.cls || '');
   const color = e.cls.includes('system') || e.cls.includes('server') || e.cls.includes('error') ? 'var(--fg3)' : ncolor(e.sender);
   const nickH = e.cls.includes('action') ? '* ' + esc(e.sender) : esc(e.sender);
-  div.innerHTML = '<span class="ts">' + e.time + '</span><span class="nick" style="color:' + color + '">' + nickH + '</span><span class="text">' + linkify(e.text) + '</span>';
+  let mediaHtml = '';
+  if (e.mediaUrl && !e.text.includes(e.mediaUrl)) {
+    // media-url tag present but URL not already in text — add link + embed
+    const alt = e.mediaAlt ? ' alt="' + esc(e.mediaAlt) + '"' : ' alt=""';
+    mediaHtml = '<br><a href="' + esc(e.mediaUrl) + '" target="_blank" rel="noopener">' + esc(e.mediaUrl) + '</a>';
+    if (VIDEO_RE.test(e.mediaUrl)) {
+      mediaHtml += '<br><video class="embed-video" src="' + esc(e.mediaUrl) + '" controls preload="metadata"></video>';
+    } else if (AUDIO_RE.test(e.mediaUrl)) {
+      mediaHtml += '<br><audio class="embed-audio" src="' + esc(e.mediaUrl) + '" controls preload="metadata"></audio>';
+    } else {
+      // Treat as image (media-url tag means the server confirmed it's media)
+      mediaHtml += '<br><img class="embed-img" src="' + esc(e.mediaUrl) + '" loading="lazy"' + alt + '>';
+    }
+  }
+  div.innerHTML = '<span class="ts">' + e.time + '</span><span class="nick" style="color:' + color + '">' + nickH + '</span><span class="text">' + linkify(e.text) + mediaHtml + '</span>';
   c.appendChild(div);
   // Click embedded image → open full size
   div.querySelectorAll('.embed-img').forEach(img => {
     img.onclick = () => window.open(img.src, '_blank');
-    img.onerror = () => img.remove(); // hide broken images
+    img.onerror = () => img.remove();
   });
   if (atBottom) c.scrollTop = c.scrollHeight;
 }
