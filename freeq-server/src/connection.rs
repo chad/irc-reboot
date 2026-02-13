@@ -1116,7 +1116,11 @@ fn handle_join(
             let should_op = did.is_some_and(|d| {
                 ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
             });
-            if should_op {
+            // Also auto-op the first user to join an empty channel (e.g. after
+            // server restart when the channel was loaded from DB with no members).
+            // This prevents orphaned channels where nobody has ops.
+            let is_only_member = ch.members.len() == 1 && ch.ops.is_empty();
+            if should_op || is_only_member {
                 ch.ops.insert(session_id.to_string());
             }
         }

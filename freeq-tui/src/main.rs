@@ -1183,42 +1183,100 @@ async fn process_input(
                 let state = if app.debug_raw { "ON" } else { "OFF" };
                 app.status_msg(&format!("Debug mode {state} — raw IRC lines will be shown in status buffer"));
             }
-            "/help" | "/h" => {
-                app.status_msg("Commands:");
-                app.status_msg("  /join #channel    - Join a channel");
-                app.status_msg("  /part [#channel]  - Leave a channel");
-                app.status_msg("  /msg target text  - Send a message");
-                app.status_msg("  /topic [text]     - View or set channel topic");
-                app.status_msg("  /mode +o nick     - Give channel operator");
-                app.status_msg("  /op nick          - Give channel operator (shortcut)");
-                app.status_msg("  /deop nick        - Remove channel operator");
-                app.status_msg("  /voice nick       - Give voice (+v)");
-                app.status_msg("  /kick nick [why]  - Kick user from channel");
-                app.status_msg("  /ban [mask|did]   - Ban a user (or list bans)");
-                app.status_msg("  /unban mask|did   - Remove a ban");
-                app.status_msg("  /invite nick      - Invite user to +i channel");
-                app.status_msg("  /mode +t / -t     - Lock/unlock topic to ops");
-                app.status_msg("  /mode +i / -i     - Set/unset invite-only");
-                app.status_msg("  /me <action>      - Send action message");
-                app.status_msg("  /whois nick       - Show user info + DID");
-                app.status_msg("  /react <emoji>    - React to the channel");
-                app.status_msg("  /preview <url>    - Fetch and share a link preview");
-                app.status_msg("  /media <path> [alt] - Upload and share a file");
-                app.status_msg("  /media --post <path> [alt] - Upload + cross-post to Bluesky");
-                app.status_msg("  /crosspost <path> [alt] - Same as /media --post");
-                app.status_msg("  /logout <handle>  - Clear cached OAuth session");
-                app.status_msg("  /quit [message]   - Disconnect");
-                app.status_msg("  /encrypt <pass>   - Enable E2EE for current channel");
-                app.status_msg("  /decrypt          - Disable E2EE for current channel");
-                app.status_msg("  /p2p              - Peer-to-peer encrypted DMs (see /p2p help)");
-                app.status_msg("  /net              - Show/hide network info popup");
-                app.status_msg("  /debug            - Toggle raw IRC line display");
-                app.status_msg("  /raw <line>       - Send raw IRC");
-                app.status_msg("  Tab               - Nick completion (or switch buffers if empty)");
-                app.status_msg("  Shift-Tab         - Previous buffer");
-                app.status_msg("  Ctrl-N / Ctrl-P   - Switch buffers");
+            "/help" | "/h" | "/commands" => {
+                app.status_msg("── Channel commands ─────────────────────");
+                app.status_msg("  /join #channel      Join a channel (/j)");
+                app.status_msg("  /part [#channel]    Leave a channel (/leave)");
+                app.status_msg("  /topic [text]       View or set channel topic (/t)");
+                app.status_msg("  /names              List users in current channel");
+                app.status_msg("  /who #channel       Show who's in a channel");
+                app.status_msg("  /list               List all channels");
+                app.status_msg("── Messaging ────────────────────────────");
+                app.status_msg("  /msg target text    Private message");
+                app.status_msg("  /me action          Action message (* nick does something)");
+                app.status_msg("  /react emoji        React to the channel (/r)");
+                app.status_msg("  /preview url        Fetch and share a link preview");
+                app.status_msg("── Channel moderation ───────────────────");
+                app.status_msg("  /op nick            Give ops (@)");
+                app.status_msg("  /deop nick          Remove ops");
+                app.status_msg("  /voice nick         Give voice (+v)");
+                app.status_msg("  /kick nick [why]    Kick user from channel (/k)");
+                app.status_msg("  /ban [mask|did]     Ban a user (no args = list bans)");
+                app.status_msg("  /unban mask|did     Remove a ban");
+                app.status_msg("  /invite nick        Invite user to +i channel");
+                app.status_msg("  /mode flags [arg]   Set channel modes:");
+                app.status_msg("    +o/−o nick   ops     +v/−v nick   voice");
+                app.status_msg("    +t/−t  topic lock    +i/−i  invite-only");
+                app.status_msg("    +n/−n  no external   +m/−m  moderated");
+                app.status_msg("    +k/−k key    channel key");
+                app.status_msg("    +b/−b mask   ban");
+                app.status_msg("── Identity & status ────────────────────");
+                app.status_msg("  /nick newnick       Change your nick");
+                app.status_msg("  /whois nick         Show user info + DID");
+                app.status_msg("  /away [message]     Set/clear away status");
+                app.status_msg("── Media & encryption ───────────────────");
+                app.status_msg("  /media path [alt]   Upload and share a file (/img, /upload)");
+                app.status_msg("  /crosspost path     Upload + cross-post to Bluesky");
+                app.status_msg("  /encrypt passphrase Enable E2EE for this channel");
+                app.status_msg("  /decrypt            Disable E2EE for this channel");
+                app.status_msg("── Peer-to-peer ─────────────────────────");
+                app.status_msg("  /p2p                Show P2P commands");
+                app.status_msg("── Other ────────────────────────────────");
+                app.status_msg("  /logout handle      Clear cached OAuth session");
+                app.status_msg("  /net                Show/hide network info popup (/stats)");
+                app.status_msg("  /debug              Toggle raw IRC line display");
+                app.status_msg("  /raw line           Send raw IRC command");
+                app.status_msg("  /quit [message]     Disconnect (/q)");
+                app.status_msg("── Keys ─────────────────────────────────");
+                app.status_msg("  Tab               Nick-complete (or next buffer if empty)");
+                app.status_msg("  Shift-Tab         Previous buffer");
+                app.status_msg("  Ctrl-N / Ctrl-P   Switch buffers");
                 app.status_msg("  PageUp / PageDown - Scroll");
                 app.status_msg("  Ctrl-C / Ctrl-Q   - Quit");
+            }
+            "/nick" => {
+                if !arg.is_empty() {
+                    handle.raw(&format!("NICK {arg}")).await?;
+                } else {
+                    app.status_msg("Usage: /nick <newnick>");
+                }
+            }
+            "/away" => {
+                if arg.is_empty() {
+                    handle.raw("AWAY").await?;
+                } else {
+                    handle.raw(&format!("AWAY :{arg}")).await?;
+                }
+            }
+            "/names" => {
+                let channel = if arg.is_empty() {
+                    app.active_buffer.clone()
+                } else {
+                    arg.to_string()
+                };
+                if channel.starts_with('#') || channel.starts_with('&') {
+                    handle.raw(&format!("NAMES {channel}")).await?;
+                } else {
+                    app.status_msg("Usage: /names [#channel]");
+                }
+            }
+            "/who" => {
+                if !arg.is_empty() {
+                    handle.raw(&format!("WHO {arg}")).await?;
+                } else {
+                    let channel = app.active_buffer.clone();
+                    if channel != "status" {
+                        handle.raw(&format!("WHO {channel}")).await?;
+                    } else {
+                        app.status_msg("Usage: /who <#channel|nick>");
+                    }
+                }
+            }
+            "/list" => {
+                handle.raw("LIST").await?;
+            }
+            "/motd" => {
+                handle.raw("MOTD").await?;
             }
             _ => {
                 app.status_msg(&format!("Unknown command: {cmd}. Type /help for help."));
