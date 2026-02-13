@@ -223,11 +223,25 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let buffer = app.buffers.get(&app.active_buffer).unwrap();
     let inner_height = inner.height as usize;
+    let inner_width = inner.width as usize;
 
-    // Calculate height of each message: 1 line for text, + IMAGE_ROWS if image is ready
+    /// Calculate how many terminal rows a message needs when wrapped.
+    fn wrapped_height(msg: &crate::app::BufferLine, width: usize) -> usize {
+        if width == 0 { return 1; }
+        let text_len = if msg.is_system {
+            // "HH:MM:SS *** message"
+            msg.timestamp.len() + 1 + 4 + msg.text.len()
+        } else {
+            // "HH:MM:SS <nick> message"
+            msg.timestamp.len() + 1 + msg.from.len() + 2 + 1 + msg.text.len()
+        };
+        (text_len + width - 1) / width  // ceil division
+    }
+
+    // Calculate height of each message including wrapping + images
     let msg_heights: Vec<usize> = buffer.messages.iter().map(|msg| {
         #[allow(unused_mut)]
-        let mut h = 1usize;
+        let mut h = wrapped_height(msg, inner_width);
         #[cfg(feature = "inline-images")]
         if has_picker {
             if let Some(ref url) = msg.image_url {
@@ -290,10 +304,13 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 
         let msg = &buffer.messages[msg_idx];
 
-        // Render the text line
+        // Render the message with word wrapping
         if y < max_y {
-            let line = if msg.is_system {
-                Line::from(vec![
+            use ratatui::widgets::Wrap;
+            use ratatui::text::Text;
+
+            let text = if msg.is_system {
+                Text::from(Line::from(vec![
                     Span::styled(
                         format!("{} ", msg.timestamp),
                         Style::default().fg(Color::DarkGray),
@@ -302,9 +319,9 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                         format!("*** {}", msg.text),
                         Style::default().fg(Color::Cyan),
                     ),
-                ])
+                ]))
             } else {
-                Line::from(vec![
+                Text::from(Line::from(vec![
                     Span::styled(
                         format!("{} ", msg.timestamp),
                         Style::default().fg(Color::DarkGray),
@@ -314,11 +331,14 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                         Style::default().fg(Color::Green),
                     ),
                     Span::raw(&msg.text),
-                ])
+                ]))
             };
-            let line_area = Rect::new(inner.x, y, inner.width, 1);
-            frame.render_widget(Paragraph::new(line), line_area);
-            y += 1;
+
+            let h = wrapped_height(msg, inner.width as usize) as u16;
+            let rows = h.min(max_y - y);
+            let msg_area = Rect::new(inner.x, y, inner.width, rows);
+            frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), msg_area);
+            y += rows;
         }
 
         // Render image if present and ready
