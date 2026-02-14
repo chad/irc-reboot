@@ -194,18 +194,13 @@
         <input id="f-channels" value="#freeq" placeholder="#chan1,#chan2">
       </div>
     </div>
-    <div class="section-label">Bluesky Identity <span class="optional">(optional — uses app password)</span></div>
+    <div class="section-label">Bluesky Identity <span class="optional">(optional)</span></div>
     <div class="field">
       <label>Handle</label>
       <input id="f-at-handle" placeholder="you.bsky.social">
     </div>
-    <div class="field" id="app-password-field" style="display:none">
-      <label>App Password</label>
-      <input id="f-app-password" type="password" placeholder="xxxx-xxxx-xxxx-xxxx" autocomplete="off">
-      <div style="font-size:10px;color:var(--fg3);margin-top:4px">Generate at <a href="https://bsky.app/settings/app-passwords" target="_blank" style="color:var(--blue)">bsky.app/settings/app-passwords</a></div>
-    </div>
     <button class="btn-primary" onclick="doConnect()">Connect as Guest</button>
-    <button id="btn-at-login" class="btn-oauth" onclick="doAtLogin()" style="display:none">Sign in with Bluesky</button>
+    <button id="btn-at-login" class="btn-oauth" onclick="startAtOAuth()" style="display:none">Sign in with Bluesky</button>
     <div id="connect-error"></div>
     <div class="connect-footer">
       <a href="https://freeq.at/connect/">Connection guide</a> ·
@@ -263,6 +258,7 @@
 
 let ws = null, nick = '', registered = false;
 let atHandle = '', atDid = '', atAccessJwt = '', atPdsUrl = '';
+let atDpopPrivateKey = null, atDpopPublicJwk = null; // DPoP keypair for OAuth
 let capNegotiating = false, wantedCaps = [], ackedCaps = new Set();
 let saslInProgress = false;
 let reconnectTimer = null, reconnectUrl = '', reconnectAttempts = 0;
@@ -371,78 +367,259 @@ function doDisconnect() {
   activeBuffer = 'server';
   ackedCaps.clear();
   atDid = ''; atAccessJwt = ''; atPdsUrl = '';
+  atDpopPrivateKey = null; atDpopPublicJwk = null;
 }
 
 function showErr(t) { document.getElementById('connect-error').textContent = t; }
 
-// ── AT Protocol direct PDS login (app password) ─────────────────
+// ── AT Protocol OAuth (PKCE + DPoP + PAR) ───────────────────────
 
-async function doAtLogin() {
+const OAUTH_CLIENT_ID = 'https://app.freeq.at/client-metadata.json';
+const OAUTH_REDIRECT_URI = 'https://app.freeq.at/';
+const OAUTH_SCOPE = 'atproto';
+
+// Base64url encode bytes or string
+function b64u(input) {
+  let bytes;
+  if (typeof input === 'string') bytes = new TextEncoder().encode(input);
+  else if (input instanceof ArrayBuffer) bytes = new Uint8Array(input);
+  else bytes = input;
+  let binary = '';
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+// Generate PKCE code_verifier and code_challenge
+function makeCodeVerifier() {
+  const buf = new Uint8Array(32);
+  crypto.getRandomValues(buf);
+  return b64u(buf);
+}
+async function makeCodeChallenge(verifier) {
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  return b64u(hash);
+}
+
+// Generate DPoP EC P-256 keypair
+async function generateDPoPKeys() {
+  const kp = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const pub = await crypto.subtle.exportKey('jwk', kp.publicKey);
+  const priv = await crypto.subtle.exportKey('jwk', kp.privateKey);
+  return { publicJwk: pub, privateJwk: priv, keyPair: kp };
+}
+
+// Import DPoP private key from exported JWK
+async function importDPoPKey(jwk) {
+  return crypto.subtle.importKey('jwk', jwk, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+}
+
+// Sign a JWT with ECDSA P-256
+async function signJwt(header, payload, privateKey) {
+  const h = b64u(JSON.stringify(header));
+  const p = b64u(JSON.stringify(payload));
+  const input = h + '.' + p;
+  const sig = await crypto.subtle.sign(
+    { name: 'ECDSA', hash: 'SHA-256' }, privateKey,
+    new TextEncoder().encode(input)
+  );
+  return input + '.' + b64u(sig);
+}
+
+// Create a DPoP proof JWT
+async function dpopProof(privateKey, publicJwk, method, url, opts = {}) {
+  const header = {
+    typ: 'dpop+jwt', alg: 'ES256',
+    jwk: { kty: publicJwk.kty, crv: publicJwk.crv, x: publicJwk.x, y: publicJwk.y }
+  };
+  const payload = {
+    jti: crypto.randomUUID(),
+    htm: method,
+    htu: url.split('?')[0],
+    iat: Math.floor(Date.now() / 1000),
+  };
+  if (opts.nonce) payload.nonce = opts.nonce;
+  if (opts.ath) payload.ath = opts.ath;
+  return signJwt(header, payload, privateKey);
+}
+
+// SHA-256 hash for DPoP ath (access token hash)
+async function tokenHash(token) {
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
+  return b64u(hash);
+}
+
+// Resolve handle → DID
+async function resolveHandle(handle) {
+  if (handle.startsWith('did:')) return handle;
+  const res = await fetch('https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=' + encodeURIComponent(handle));
+  if (!res.ok) throw new Error('Could not resolve handle: ' + handle);
+  return (await res.json()).did;
+}
+
+// Resolve DID → PDS URL
+async function resolvePds(did) {
+  let didDoc;
+  if (did.startsWith('did:plc:')) {
+    const res = await fetch('https://plc.directory/' + did);
+    if (res.ok) didDoc = await res.json();
+  } else if (did.startsWith('did:web:')) {
+    const res = await fetch('https://' + did.slice(8) + '/.well-known/did.json');
+    if (res.ok) didDoc = await res.json();
+  }
+  if (didDoc?.service) {
+    const svc = didDoc.service.find(s => s.id === '#atproto_pds' || s.type === 'AtprotoPersonalDataServer');
+    if (svc) return svc.serviceEndpoint;
+  }
+  return 'https://bsky.social';
+}
+
+// Fetch authorization server metadata from PDS
+async function fetchAuthServerMeta(pdsUrl) {
+  // Try the PDS protected-resource metadata first
+  const rsRes = await fetch(pdsUrl + '/.well-known/oauth-protected-resource');
+  if (rsRes.ok) {
+    const rs = await rsRes.json();
+    const asUrl = rs.authorization_servers?.[0];
+    if (asUrl) {
+      const asRes = await fetch(asUrl + '/.well-known/oauth-authorization-server');
+      if (asRes.ok) return await asRes.json();
+    }
+  }
+  // Fallback: PDS is also the AS
+  const res = await fetch(pdsUrl + '/.well-known/oauth-authorization-server');
+  if (res.ok) return await res.json();
+  throw new Error('Could not find authorization server for ' + pdsUrl);
+}
+
+// POST with DPoP, retrying once if nonce is required
+async function dpopFetch(url, body, privateKey, publicJwk, dpopNonce) {
+  async function attempt(nonce) {
+    const proof = await dpopProof(privateKey, publicJwk, 'POST', url, { nonce });
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'DPoP': proof },
+      body
+    });
+  }
+  let res = await attempt(dpopNonce);
+  if (res.status === 400 || res.status === 401) {
+    const newNonce = res.headers.get('DPoP-Nonce');
+    if (newNonce) {
+      const body2 = await res.json().catch(() => ({}));
+      if (body2.error === 'use_dpop_nonce') {
+        res = await attempt(newNonce);
+      }
+    }
+  }
+  return res;
+}
+
+// Start the OAuth flow — redirects the user to the auth server
+async function startAtOAuth() {
   atHandle = document.getElementById('f-at-handle').value.trim();
-  const appPassword = document.getElementById('f-app-password').value.trim();
-  if (!atHandle) { showErr('Enter your Bluesky handle'); return; }
-  if (!appPassword) { showErr('Enter your app password'); return; }
-
+  if (!atHandle) { showErr('Enter your Bluesky handle first'); return; }
   showErr('Resolving identity…');
 
   try {
-    // Step 1: Resolve handle → DID and find PDS
-    let did = atHandle;
-    if (!did.startsWith('did:')) {
-      // Resolve handle via public API
-      const res = await fetch('https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=' + encodeURIComponent(atHandle));
-      if (!res.ok) throw new Error('Could not resolve handle "' + atHandle + '"');
-      const data = await res.json();
-      did = data.did;
-    }
-    atDid = did;
+    const did = await resolveHandle(atHandle);
+    const pdsUrl = await resolvePds(did);
 
-    // Step 2: Resolve DID document to find PDS URL
-    let pdsUrl = 'https://bsky.social'; // default fallback
-    try {
-      let didDoc;
-      if (did.startsWith('did:plc:')) {
-        const res = await fetch('https://plc.directory/' + did);
-        if (res.ok) didDoc = await res.json();
-      } else if (did.startsWith('did:web:')) {
-        const domain = did.slice(8);
-        const res = await fetch('https://' + domain + '/.well-known/did.json');
-        if (res.ok) didDoc = await res.json();
-      }
-      if (didDoc && didDoc.service) {
-        const atprotoService = didDoc.service.find(s => s.id === '#atproto_pds' || s.type === 'AtprotoPersonalDataServer');
-        if (atprotoService) pdsUrl = atprotoService.serviceEndpoint;
-      }
-    } catch(e) { /* use fallback */ }
-    atPdsUrl = pdsUrl;
+    showErr('Contacting authorization server…');
+    const asMeta = await fetchAuthServerMeta(pdsUrl);
 
-    showErr('Authenticating with PDS…');
+    const codeVerifier = makeCodeVerifier();
+    const codeChallenge = await makeCodeChallenge(codeVerifier);
+    const state = crypto.randomUUID();
+    const dpop = await generateDPoPKeys();
 
-    // Step 3: Create session with app password
-    const sessionRes = await fetch(pdsUrl + '/xrpc/com.atproto.server.createSession', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: atHandle, password: appPassword })
+    // Save state for callback
+    sessionStorage.setItem('freeq_oauth', JSON.stringify({
+      state, codeVerifier,
+      dpopPrivateJwk: dpop.privateJwk, dpopPublicJwk: dpop.publicJwk,
+      tokenEndpoint: asMeta.token_endpoint,
+      did, pdsUrl, handle: atHandle,
+      serverUrl: document.getElementById('f-server').value.trim(),
+      nick: document.getElementById('f-nick').value.trim(),
+      channels: document.getElementById('f-channels').value.trim(),
+    }));
+
+    // PAR (Pushed Authorization Request)
+    const parBody = new URLSearchParams({
+      client_id: OAUTH_CLIENT_ID, redirect_uri: OAUTH_REDIRECT_URI,
+      response_type: 'code', scope: OAUTH_SCOPE, state,
+      code_challenge: codeChallenge, code_challenge_method: 'S256',
+      login_hint: atHandle,
     });
 
-    if (!sessionRes.ok) {
-      const err = await sessionRes.json().catch(() => ({}));
-      throw new Error(err.message || 'Authentication failed (check handle and app password)');
+    showErr('Starting authorization…');
+    const parRes = await dpopFetch(asMeta.pushed_authorization_request_endpoint, parBody, dpop.keyPair.privateKey, dpop.publicJwk);
+
+    if (!parRes.ok) {
+      const err = await parRes.json().catch(() => ({}));
+      throw new Error('Authorization request failed: ' + (err.error_description || err.error || parRes.status));
+    }
+    const par = await parRes.json();
+
+    // Redirect to authorization server
+    window.location.href = asMeta.authorization_endpoint + '?' + new URLSearchParams({
+      client_id: OAUTH_CLIENT_ID, request_uri: par.request_uri,
+    });
+  } catch(e) {
+    showErr('OAuth failed: ' + e.message);
+  }
+}
+
+// Handle OAuth callback (called on page load if URL has ?code= & ?state=)
+async function handleOAuthCallback(code, state, iss) {
+  const stored = JSON.parse(sessionStorage.getItem('freeq_oauth') || 'null');
+  if (!stored || stored.state !== state) { showErr('Invalid OAuth state — please try again'); return; }
+  sessionStorage.removeItem('freeq_oauth');
+
+  showErr('Completing authentication…');
+
+  try {
+    const privateKey = await importDPoPKey(stored.dpopPrivateJwk);
+    const publicJwk = stored.dpopPublicJwk;
+
+    // Token exchange
+    const tokenBody = new URLSearchParams({
+      grant_type: 'authorization_code', code,
+      redirect_uri: OAUTH_REDIRECT_URI, client_id: OAUTH_CLIENT_ID,
+      code_verifier: stored.codeVerifier,
+    });
+
+    const tokenRes = await dpopFetch(stored.tokenEndpoint, tokenBody, privateKey, publicJwk);
+
+    if (!tokenRes.ok) {
+      const err = await tokenRes.json().catch(() => ({}));
+      throw new Error('Token exchange failed: ' + (err.error_description || err.error || tokenRes.status));
     }
 
-    const session = await sessionRes.json();
-    atDid = session.did;
-    atAccessJwt = session.accessJwt;
-    atHandle = session.handle || atHandle;
+    const tokens = await tokenRes.json();
+
+    // Set auth state
+    atDid = tokens.sub || stored.did;
+    atAccessJwt = tokens.access_token;
+    atHandle = stored.handle;
+    atPdsUrl = stored.pdsUrl;
+    atDpopPrivateKey = privateKey;
+    atDpopPublicJwk = publicJwk;
+
+    // Restore form fields
+    document.getElementById('f-server').value = stored.serverUrl;
+    document.getElementById('f-nick').value = stored.nick;
+    document.getElementById('f-channels').value = stored.channels;
+    document.getElementById('f-at-handle').value = stored.handle;
 
     showErr('Authenticated as ' + atHandle + '! Connecting…');
 
-    // Clear the app password from the DOM immediately
-    document.getElementById('f-app-password').value = '';
+    // Clean URL
+    history.replaceState(null, '', window.location.pathname);
 
+    // Auto-connect
     doConnect();
   } catch(e) {
-    showErr('Login failed: ' + e.message);
+    showErr('OAuth failed: ' + e.message);
   }
 }
 
@@ -516,10 +693,27 @@ function handleLine(rawLine) {
     // ── SASL ──
     case 'AUTHENTICATE': {
       if (saslInProgress && atAccessJwt && p[0] && p[0] !== '+') {
-        const response = { did: atDid, method: 'pds-session', signature: atAccessJwt, pds_url: atPdsUrl };
-        const encoded = btoa(JSON.stringify(response)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-        if (encoded.length <= 400) { raw('AUTHENTICATE ' + encoded); }
-        else { for (let i = 0; i < encoded.length; i += 400) raw('AUTHENTICATE ' + encoded.slice(i, i + 400)); raw('AUTHENTICATE +'); }
+        (async () => {
+          try {
+            let response;
+            if (atDpopPrivateKey && atDpopPublicJwk) {
+              // OAuth: create DPoP proof for the PDS getSession endpoint
+              const getSessionUrl = atPdsUrl.replace(/\/+$/, '') + '/xrpc/com.atproto.server.getSession';
+              const ath = await tokenHash(atAccessJwt);
+              const proof = await dpopProof(atDpopPrivateKey, atDpopPublicJwk, 'GET', getSessionUrl, { ath });
+              response = { did: atDid, method: 'pds-oauth', signature: atAccessJwt, pds_url: atPdsUrl, dpop_proof: proof };
+            } else {
+              // Legacy: plain session token
+              response = { did: atDid, method: 'pds-session', signature: atAccessJwt, pds_url: atPdsUrl };
+            }
+            const encoded = btoa(JSON.stringify(response)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+            if (encoded.length <= 400) { raw('AUTHENTICATE ' + encoded); }
+            else { for (let i = 0; i < encoded.length; i += 400) raw('AUTHENTICATE ' + encoded.slice(i, i + 400)); raw('AUTHENTICATE +'); }
+          } catch(e) {
+            console.error('SASL response error:', e);
+            raw('AUTHENTICATE *'); // abort SASL
+          }
+        })();
       }
       break;
     }
@@ -1046,10 +1240,14 @@ document.addEventListener('keydown', (e) => {
 
   const handleInput = document.getElementById('f-at-handle');
   handleInput.addEventListener('input', () => {
-    const show = handleInput.value.trim().length > 0;
-    document.getElementById('app-password-field').style.display = show ? '' : 'none';
-    document.getElementById('btn-at-login').style.display = show ? '' : 'none';
+    document.getElementById('btn-at-login').style.display = handleInput.value.trim().length > 0 ? '' : 'none';
   });
+
+  // Handle OAuth callback (page loaded with ?code=...&state=...)
+  const params = new URLSearchParams(window.location.search);
+  if (params.has('code') && params.has('state')) {
+    handleOAuthCallback(params.get('code'), params.get('state'), params.get('iss'));
+  }
 })();
 </script>
 </body>

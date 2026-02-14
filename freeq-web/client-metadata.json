@@ -1,0 +1,13 @@
+{
+  "client_id": "https://app.freeq.at/client-metadata.json",
+  "client_name": "freeq web",
+  "client_uri": "https://app.freeq.at",
+  "logo_uri": "https://freeq.at/static/logo.png",
+  "redirect_uris": ["https://app.freeq.at/"],
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "token_endpoint_auth_method": "none",
+  "application_type": "web",
+  "dpop_bound_access_tokens": true,
+  "scope": "atproto"
+}
