@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}freeq{% endblock %}
+{% block head %}
+<style>
+.hero {
+  text-align: center; padding: 80px 24px 48px;
+  background: linear-gradient(180deg, var(--bg3) 0%, var(--bg) 100%);
+}
+.hero h1 { font-size: 48px; color: var(--blue); margin-bottom: 4px; }
+.hero .tagline { font-size: 18px; color: var(--fg); margin-bottom: 8px; }
+.hero .sub { font-size: 14px; color: var(--fg3); max-width: 560px; margin: 0 auto 32px; }
+.hero .cta { display: inline-flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+.hero .cta a {
+  display: inline-block; padding: 10px 24px; border-radius: 4px;
+  font-weight: 700; font-size: 13px; font-family: var(--font);
+}
+.hero .cta .primary { background: var(--blue); color: var(--bg3); }
+.hero .cta .primary:hover { opacity: .9; text-decoration: none; }
+.hero .cta .secondary { border: 1px solid var(--surface); color: var(--fg2); }
+.hero .cta .secondary:hover { border-color: var(--fg3); text-decoration: none; }
+
+.quick-connect {
+  background: var(--bg2); border: 1px solid var(--surface); border-radius: 8px;
+  max-width: 520px; margin: 32px auto 0; padding: 20px 24px;
+  text-align: left; font-size: 13px;
+}
+.quick-connect .label { color: var(--fg3); font-size: 10px; text-transform: uppercase; letter-spacing: .8px; margin-bottom: 10px; }
+.quick-connect .row { display: flex; justify-content: space-between; padding: 4px 0; }
+.quick-connect .row .k { color: var(--fg3); }
+.quick-connect .row .v { color: var(--green); }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; padding: 48px 24px; max-width: 960px; margin: 0 auto; }
+.card {
+  background: var(--bg2); border: 1px solid var(--surface); border-radius: 8px;
+  padding: 24px; transition: border-color .15s;
+}
+.card:hover { border-color: var(--overlay); }
+.card h3 { color: var(--fg); font-size: 15px; margin-bottom: 8px; }
+.card .icon { font-size: 24px; margin-bottom: 12px; }
+.card p { color: var(--fg3); font-size: 13px; margin: 0; }
+.card a { display: block; margin-top: 12px; font-size: 12px; }
+
+.section { padding: 32px 24px; max-width: 900px; margin: 0 auto; }
+.section h2 { border: none; padding-top: 0; text-align: center; color: var(--fg3); font-size: 14px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 24px; }
+
+@media (max-width: 640px) {
+  .hero { padding: 48px 16px 32px; }
+  .hero h1 { font-size: 32px; }
+  .hero .tagline { font-size: 16px; }
+  .cards { padding: 32px 16px; }
+}
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="hero">
+  <h1>freeq</h1>
+  <div class="tagline">IRC with identity</div>
+  <div class="sub">
+    Authenticate with your Bluesky account. Your DID is your identity.
+    Standard IRC clients work unchanged. Everything else is optional.
+  </div>
+  <div class="cta">
+    <a href="https://app.freeq.at" class="primary">Open Web Client</a>
+    <a href="/connect/" class="secondary">Connect →</a>
+  </div>
+  <div class="quick-connect">
+    <div class="label">Quick Connect</div>
+    <div class="row"><span class="k">Web</span><span class="v">app.freeq.at</span></div>
+    <div class="row"><span class="k">IRC</span><span class="v">irc.freeq.at:6667</span></div>
+    <div class="row"><span class="k">TLS</span><span class="v">irc.freeq.at:6697</span></div>
+    <div class="row"><span class="k">WebSocket</span><span class="v">wss://irc.freeq.at/irc</span></div>
+  </div>
+</div>
+
+<div class="cards">
+  <div class="card">
+    <div class="icon">🔌</div>
+    <h3>Connect</h3>
+    <p>TCP, TLS, WebSocket, or iroh QUIC. Use any standard IRC client — irssi, WeeChat, Hexchat, mIRC — or the built-in web client. No special software required for guests.</p>
+    <a href="/connect/">Connection guide →</a>
+  </div>
+  <div class="card">
+    <div class="icon">🔑</div>
+    <h3>Authenticate</h3>
+    <p>Sign in with your AT Protocol identity via SASL. Your DID owns your nick, persists across reconnects, and works across federated servers. Private keys never leave your device.</p>
+    <a href="/docs/protocol/">Protocol details →</a>
+  </div>
+  <div class="card">
+    <div class="icon">🛠</div>
+    <h3>Build</h3>
+    <p>Rust SDK with a bot framework, E2EE, media uploads, and P2P encrypted DMs. The <code>(ClientHandle, Receiver&lt;Event&gt;)</code> pattern makes it easy to build anything.</p>
+    <a href="/sdk/">SDK docs →</a>
+  </div>
+</div>
+
+<div class="section">
+  <h2>What's different</h2>
+  <table>
+    <tr><td style="color:var(--green)">✓</td><td>AT Protocol SASL authentication — your Bluesky DID is your IRC identity</td></tr>
+    <tr><td style="color:var(--green)">✓</td><td>DID-based nick ownership, channel ops, bans, and invites</td></tr>
+    <tr><td style="color:var(--green)">✓</td><td>End-to-end encrypted channels (AES-256-GCM) and DID-based group encryption</td></tr>
+    <tr><td style="color:var(--green)">✓</td><td>Peer-to-peer encrypted DMs via iroh QUIC — no server in the middle</td></tr>
+    <tr><td style="color:var(--green)">✓</td><td>Server-to-server federation with CRDT state convergence</td></tr>
+    <tr><td style="color:var(--green)">✓</td><td>IRCv3 capabilities: message-tags, server-time, batch, chathistory, account-notify</td></tr>
+    <tr><td style="color:var(--green)">✓</td><td>Plugin system for custom server behavior</td></tr>
+    <tr><td style="color:var(--green)">✓</td><td>100% backward compatible — standard IRC clients connect as guests</td></tr>
+  </table>
+</div>
+{% endblock %}

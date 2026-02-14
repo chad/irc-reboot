@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% set nav_active = 'connect' %}
+{% block title %}Connect{% endblock %}
+
+{% block body %}
+<div class="container">
+<h1>Connect to freeq</h1>
+<p>Multiple ways to connect. Pick what works for you.</p>
+
+<h2>Web Client</h2>
+<p>No install needed. Works in any browser.</p>
+<p><a href="https://app.freeq.at" style="color:var(--green);font-weight:700;">→ Open app.freeq.at</a></p>
+<p>Supports AT Protocol OAuth login, channels, PMs, nick completion, and message history.</p>
+
+<h2>Standard IRC Client</h2>
+<p>Any IRC client works. Connect as a guest — no authentication required.</p>
+
+<h3>irssi</h3>
+<pre><code>/server add -tls freeq irc.freeq.at 6697
+/connect freeq</code></pre>
+
+<h3>WeeChat</h3>
+<pre><code>/server add freeq irc.freeq.at/6697 -ssl
+/connect freeq</code></pre>
+
+<h3>Hexchat / mIRC</h3>
+<p>Add server <code>irc.freeq.at/6697</code> with SSL enabled.</p>
+
+<h3>Plain TCP (no TLS)</h3>
+<pre><code>/server add freeq irc.freeq.at 6667
+/connect freeq</code></pre>
+
+<h3>netcat (testing)</h3>
+<pre><code>nc irc.freeq.at 6667
+NICK mynick
+USER mynick 0 * :Hello
+JOIN #freeq</code></pre>
+
+<h2>TUI Client (with AT Protocol auth)</h2>
+<p>The freeq TUI client authenticates with your Bluesky identity via OAuth.</p>
+
+<pre><code># Build from source
+git clone https://github.com/chad/freeq
+cd freeq
+cargo build --release --bin irc-at-tui
+
+# Connect with AT Protocol authentication
+./target/release/irc-at-tui \
+  --server irc.freeq.at --tls \
+  --at-handle yourname.bsky.social</code></pre>
+
+<p>First run opens your browser for OAuth. Sessions are cached locally at
+<code>~/.config/freeq-tui/</code>.</p>
+
+<h2>WebSocket</h2>
+<p>Connect from JavaScript or any WebSocket client:</p>
+<pre><code>const ws = new WebSocket('wss://irc.freeq.at/irc');
+ws.onopen = () => {
+  ws.send('NICK mybot\r\n');
+  ws.send('USER mybot 0 * :My Bot\r\n');
+};
+ws.onmessage = (e) => console.log(e.data);</code></pre>
+
+<h2>iroh QUIC</h2>
+<p>NAT-traversing, end-to-end encrypted QUIC transport via
+<a href="https://iroh.computer">iroh</a>. The server advertises its
+iroh endpoint ID in <code>CAP LS</code>. The TUI client auto-discovers
+and upgrades.</p>
+<pre><code># Connect directly via iroh endpoint ID
+./target/release/irc-at-tui --iroh-addr &lt;endpoint-id&gt;</code></pre>
+
+<h2>Bot SDK</h2>
+<p>Build bots with the Rust SDK:</p>
+<pre><code>use freeq_sdk::bot::{Bot, BotConfig, Command, PermissionLevel};
+
+let config = BotConfig {
+    server: "irc.freeq.at".into(),
+    port: 6697,
+    tls: true,
+    nick: "mybot".into(),
+    channels: vec!["#bots".into()],
+    ..Default::default()
+};
+
+let mut bot = Bot::new(config);
+bot.command(Command::new("hello", "Say hello", PermissionLevel::Anyone,
+    |ctx| Box::pin(async move {
+        ctx.reply("Hello!").await;
+        Ok(())
+    })
+));
+bot.run().await?;</code></pre>
+<p>See <a href="/sdk/">SDK documentation</a> for the full API.</p>
+
+<h2>Connection Summary</h2>
+<table>
+<tr><th>Method</th><th>Address</th><th>Auth</th></tr>
+<tr><td>TCP</td><td><code>irc.freeq.at:6667</code></td><td>Guest</td></tr>
+<tr><td>TLS</td><td><code>irc.freeq.at:6697</code></td><td>Guest</td></tr>
+<tr><td>WebSocket</td><td><code>wss://irc.freeq.at/irc</code></td><td>Guest or OAuth</td></tr>
+<tr><td>Web Client</td><td><a href="https://app.freeq.at">app.freeq.at</a></td><td>Guest or OAuth</td></tr>
+<tr><td>TUI Client</td><td>Build from source</td><td>AT Protocol SASL</td></tr>
+<tr><td>iroh QUIC</td><td>Auto-discovered</td><td>AT Protocol SASL</td></tr>
+</table>
+</div>
+{% endblock %}

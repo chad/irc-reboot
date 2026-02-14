@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% set nav_active = 'about' %}
+{% block title %}About{% endblock %}
+
+{% block body %}
+<div class="container">
+<h1>About freeq</h1>
+<p>freeq is an IRC server and ecosystem that uses
+<a href="https://atproto.com">AT Protocol</a> (Bluesky) identities
+for authentication. It treats IRC as <strong>infrastructure</strong>,
+not a product — modernizing identity without centralization, UX regressions,
+or protocol breakage.</p>
+
+<h2>Philosophy</h2>
+<p>IRC is 36 years old and still works. The protocol is simple, the
+ecosystem is vast, and the operational model is well understood. What IRC
+lacks is modern identity.</p>
+<p>freeq adds identity through AT Protocol's decentralized DID system.
+Your Bluesky handle becomes your IRC identity. Your DID owns your nick,
+your channel ops, your bans. Private keys never leave your device.</p>
+<p>Everything is optional. Standard IRC clients connect as guests.
+SASL authentication is there for users who want it. E2EE, P2P DMs,
+iroh transport, federation — each layer is zero-cost when not used.</p>
+
+<h2>Project</h2>
+<table>
+<tr><td style="color:var(--fg3)">Source</td><td><a href="https://github.com/chad/freeq">github.com/chad/freeq</a></td></tr>
+<tr><td style="color:var(--fg3)">License</td><td>MIT</td></tr>
+<tr><td style="color:var(--fg3)">Language</td><td>Rust</td></tr>
+<tr><td style="color:var(--fg3)">Server</td><td>irc.freeq.at</td></tr>
+<tr><td style="color:var(--fg3)">Web Client</td><td><a href="https://app.freeq.at">app.freeq.at</a></td></tr>
+</table>
+
+<h2>Components</h2>
+<table>
+<tr><th>Crate</th><th>Description</th></tr>
+<tr><td><code>freeq-server</code></td><td>IRC server with SASL, WebSocket, iroh, S2S federation, plugins</td></tr>
+<tr><td><code>freeq-sdk</code></td><td>Client SDK: connect, auth, events, E2EE, P2P, bot framework</td></tr>
+<tr><td><code>freeq-tui</code></td><td>Terminal UI client with AT Protocol OAuth</td></tr>
+<tr><td><code>freeq-web</code></td><td>Browser-based IRC client (single HTML file)</td></tr>
+<tr><td><code>freeq-site</code></td><td>This website</td></tr>
+</table>
+
+<h2>Credits</h2>
+<p>Created by <a href="https://bsky.app/profile/chadfowler.com">Chad Fowler</a>.</p>
+<p>Built with:</p>
+<ul>
+  <li><a href="https://atproto.com">AT Protocol</a> — decentralized identity</li>
+  <li><a href="https://iroh.computer">iroh</a> — QUIC transport and NAT traversal</li>
+  <li><a href="https://automerge.org">Automerge</a> — CRDT state convergence</li>
+  <li><a href="https://www.rust-lang.org">Rust</a></li>
+  <li><a href="https://tokio.rs">Tokio</a> — async runtime</li>
+  <li><a href="https://github.com/catppuccin/catppuccin">Catppuccin Mocha</a> — color palette</li>
+</ul>
+
+<h2>Contact</h2>
+<p>
+  Join <code>#freeq</code> on <a href="https://app.freeq.at">app.freeq.at</a><br>
+  <a href="https://bsky.app/profile/chadfowler.com">@chadfowler.com</a> on Bluesky<br>
+  <a href="https://github.com/chad/freeq/issues">GitHub Issues</a>
+</p>
+</div>
+{% endblock %}

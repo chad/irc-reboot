@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% set nav_active = 'docs' %}
+{% block title %}Documentation{% endblock %}
+
+{% block body %}
+<div class="container">
+<h1>Documentation</h1>
+<p>Technical documentation for the freeq IRC server and ecosystem.</p>
+
+<h2>Protocol</h2>
+<table>
+<tr><td><a href="/docs/protocol/">Protocol Notes</a></td><td style="color:var(--fg3)">SASL ATPROTO-CHALLENGE mechanism, DID extensions, transport stack, plugin hooks</td></tr>
+<tr><td><a href="/docs/features/">Feature Catalog</a></td><td style="color:var(--fg3)">Complete list of every implemented feature with status</td></tr>
+<tr><td><a href="/docs/limitations/">Known Limitations</a></td><td style="color:var(--fg3)">Explicit gaps and missing features</td></tr>
+</table>
+
+<h2>Architecture</h2>
+<table>
+<tr><td><a href="/docs/architecture/">Architecture Decisions</a></td><td style="color:var(--fg3)">Design rationale and tradeoffs</td></tr>
+<tr><td><a href="/docs/s2s/">S2S Federation</a></td><td style="color:var(--fg3)">Server-to-server protocol analysis and audit</td></tr>
+<tr><td><a href="/docs/web-infra/">Web Infrastructure</a></td><td style="color:var(--fg3)">WebSocket, REST API, and web client proposal</td></tr>
+</table>
+
+<h2>Guides</h2>
+<table>
+<tr><td><a href="/connect/">Connection Guide</a></td><td style="color:var(--fg3)">How to connect with every supported client and transport</td></tr>
+<tr><td><a href="/sdk/">SDK Documentation</a></td><td style="color:var(--fg3)">Building clients, bots, and integrations</td></tr>
+</table>
+
+<h2>Roadmap</h2>
+<table>
+<tr><td><a href="/docs/future/">Future Direction</a></td><td style="color:var(--fg3)">Planned features and long-term vision</td></tr>
+</table>
+
+<h2>Source</h2>
+<p>All documentation lives in the <a href="https://github.com/chad/freeq/tree/main/docs">docs/</a>
+directory of the repository.</p>
+</div>
+{% endblock %}

@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% set nav_active = 'sdk' %}
+{% block title %}SDK{% endblock %}
+
+{% block body %}
+<div class="container">
+<h1>freeq SDK</h1>
+<p>Rust crate for building IRC clients, bots, and integrations that
+authenticate with AT Protocol identities.</p>
+
+<pre><code># Cargo.toml
+[dependencies]
+freeq-sdk = { git = "https://github.com/chad/freeq" }</code></pre>
+
+<h2>Architecture</h2>
+<p>The SDK exposes a <code>(ClientHandle, Receiver&lt;Event&gt;)</code> pattern.
+Connect, authenticate, then consume events in a loop:</p>
+
+<pre><code>use freeq_sdk::client::{ClientHandle, Config};
+use freeq_sdk::event::Event;
+
+let config = Config {
+    server: "irc.freeq.at".into(),
+    port: 6697,
+    tls: true,
+    nick: "myapp".into(),
+    ..Default::default()
+};
+
+let (handle, mut events) = freeq_sdk::client::connect(config).await?;
+
+// Send commands
+handle.join("#mychannel").await?;
+handle.privmsg("#mychannel", "Hello from my app").await?;
+
+// Receive events
+while let Some(event) = events.recv().await {
+    match event {
+        Event::Privmsg { from, target, text, .. } => {
+            println!("{from} -> {target}: {text}");
+        }
+        _ => {}
+    }
+}</code></pre>
+
+<h2>Authentication</h2>
+<p>The SDK supports multiple authentication methods via the pluggable
+<code>ChallengeSigner</code> trait:</p>
+
+<table>
+<tr><th>Signer</th><th>Use Case</th></tr>
+<tr><td><code>KeySigner</code></td><td>Sign challenges with a secp256k1 or ed25519 private key</td></tr>
+<tr><td><code>PdsSessionSigner</code></td><td>App password or OAuth token — calls PDS to verify</td></tr>
+<tr><td><code>StubSigner</code></td><td>Testing — returns a fixed response</td></tr>
+</table>
+
+<h3>OAuth Flow</h3>
+<pre><code>use freeq_sdk::oauth;
+
+// Full browser-based OAuth flow
+let session = oauth::authenticate("yourname.bsky.social").await?;
+// session contains access_jwt, refresh_jwt, DPoP key, PDS URL
+
+// Create a signer from the OAuth session
+let signer = PdsSessionSigner::new_with_refresh(
+    session.did, session.pds_url,
+    session.access_jwt, session.refresh_jwt,
+    session.dpop_key,
+);</code></pre>
+
+<h2>Bot Framework</h2>
+<p>High-level framework for building command-based bots with permission levels:</p>
+
+<pre><code>use freeq_sdk::bot::{Bot, BotConfig, Command, PermissionLevel};
+
+let mut bot = Bot::new(BotConfig {
+    server: "irc.freeq.at".into(),
+    port: 6697, tls: true,
+    nick: "mybot".into(),
+    channels: vec!["#bots".into()],
+    admin_dids: vec!["did:plc:yourdid".into()],
+    ..Default::default()
+});
+
+// Anyone can use this
+bot.command(Command::new("ping", "Check if bot is alive",
+    PermissionLevel::Anyone,
+    |ctx| Box::pin(async move { ctx.reply("pong!").await; Ok(()) })
+));
+
+// Only authenticated users
+bot.command(Command::new("whoami", "Show your DID",
+    PermissionLevel::Authenticated,
+    |ctx| Box::pin(async move {
+        let did = ctx.sender_did.as_deref().unwrap_or("not authenticated");
+        ctx.reply(&format!("You are {did}")).await;
+        Ok(())
+    })
+));
+
+// Only admin DIDs
+bot.command(Command::new("shutdown", "Stop the bot",
+    PermissionLevel::Admin,
+    |ctx| Box::pin(async move { ctx.reply("Shutting down...").await; Ok(()) })
+));
+
+bot.run().await?;</code></pre>
+
+<h2>End-to-End Encryption</h2>
+<p>Channel encryption with AES-256-GCM:</p>
+<pre><code>use freeq_sdk::e2ee;
+
+// Encrypt with a shared passphrase
+let encrypted = e2ee::encrypt("#mychannel", "secret passphrase", "Hello!");
+// → "ENC1:&lt;nonce&gt;:&lt;ciphertext&gt;"
+
+let plaintext = e2ee::decrypt("#mychannel", "secret passphrase", &encrypted)?;
+// → "Hello!"</code></pre>
+
+<p>DID-based group encryption (no shared secret):</p>
+<pre><code>use freeq_sdk::e2ee_did;
+
+// Group key derived from sorted member DIDs
+let members = vec!["did:plc:alice", "did:plc:bob", "did:plc:carol"];
+let encrypted = e2ee_did::encrypt_group(&members, epoch, "Hello group!")?;
+// → "ENC2:&lt;epoch&gt;:&lt;nonce&gt;:&lt;ciphertext&gt;"</code></pre>
+
+<h2>Media & Rich Content</h2>
+<p>Upload media to the AT Protocol PDS and send as IRC message tags:</p>
+<pre><code>use freeq_sdk::media;
+
+// Upload an image
+let blob = media::upload_to_pds(&session, image_bytes, "image/jpeg").await?;
+
+// Send as a tagged message
+handle.send_media("#channel", "Check this out",
+    "image/jpeg", &blob.url, Some("A cool photo")).await?;</code></pre>
+
+<h2>Modules</h2>
+<table>
+<tr><th>Module</th><th>Description</th></tr>
+<tr><td><code>freeq_sdk::client</code></td><td>IRC connection, handle, events</td></tr>
+<tr><td><code>freeq_sdk::auth</code></td><td>SASL challenge signing</td></tr>
+<tr><td><code>freeq_sdk::oauth</code></td><td>AT Protocol OAuth 2.0 flow</td></tr>
+<tr><td><code>freeq_sdk::did</code></td><td>DID resolution (plc, web)</td></tr>
+<tr><td><code>freeq_sdk::pds</code></td><td>PDS client (sessions, verification)</td></tr>
+<tr><td><code>freeq_sdk::bot</code></td><td>Bot framework with commands</td></tr>
+<tr><td><code>freeq_sdk::e2ee</code></td><td>Passphrase-based channel encryption</td></tr>
+<tr><td><code>freeq_sdk::e2ee_did</code></td><td>DID-based group + DM encryption</td></tr>
+<tr><td><code>freeq_sdk::media</code></td><td>PDS media upload, link previews</td></tr>
+<tr><td><code>freeq_sdk::p2p</code></td><td>Peer-to-peer encrypted DMs</td></tr>
+<tr><td><code>freeq_sdk::irc</code></td><td>IRC message parser with tags</td></tr>
+<tr><td><code>freeq_sdk::event</code></td><td>Event types</td></tr>
+</table>
+
+<h2>Source & Examples</h2>
+<p>
+  <a href="https://github.com/chad/freeq/tree/main/freeq-sdk">freeq-sdk on GitHub</a><br>
+  <a href="https://github.com/chad/freeq/tree/main/freeq-sdk/examples">Example bots</a>
+</p>
+</div>
+{% endblock %}

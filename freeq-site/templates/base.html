@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}freeq{% endblock %} — IRC with identity</title>
+<meta name="description" content="{% block description %}IRC server with AT Protocol (Bluesky) identity authentication. Connect with any IRC client, authenticate with your Bluesky account.{% endblock %}">
+<style>
+:root {
+  --bg: #1e1e2e; --bg2: #181825; --bg3: #11111b;
+  --surface: #313244; --overlay: #45475a;
+  --fg: #cdd6f4; --fg2: #a6adc8; --fg3: #6c7086;
+  --red: #f38ba8; --green: #a6e3a1; --yellow: #f9e2af;
+  --blue: #89b4fa; --mauve: #cba6f7; --teal: #94e2d5;
+  --pink: #f5c2e7; --peach: #fab387; --sky: #89dceb;
+  --font: 'SF Mono','Menlo','Consolas','Liberation Mono',monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: var(--font); font-size: 14px;
+  background: var(--bg); color: var(--fg);
+  line-height: 1.7; min-height: 100vh;
+}
+a { color: var(--blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code { background: var(--bg3); padding: 2px 6px; border-radius: 3px; font-size: 13px; }
+pre { background: var(--bg3); border: 1px solid var(--surface); border-radius: 6px; padding: 16px; overflow-x: auto; margin: 16px 0; }
+pre code { background: none; padding: 0; }
+
+/* ── Nav ── */
+nav {
+  background: var(--bg2); border-bottom: 1px solid var(--surface);
+  padding: 0 24px; display: flex; align-items: center; height: 48px;
+  position: sticky; top: 0; z-index: 100;
+}
+nav .logo { color: var(--blue); font-weight: 700; font-size: 16px; margin-right: 32px; }
+nav .logo span { color: var(--fg3); font-weight: 400; }
+nav .links { display: flex; gap: 20px; }
+nav .links a { color: var(--fg2); font-size: 13px; }
+nav .links a:hover { color: var(--fg); text-decoration: none; }
+nav .links a.active { color: var(--blue); }
+nav .spacer { flex: 1; }
+nav .gh { color: var(--fg3); font-size: 12px; }
+nav .gh:hover { color: var(--fg2); }
+
+/* ── Content ── */
+.container { max-width: 900px; margin: 0 auto; padding: 48px 24px; }
+.container-wide { max-width: 1100px; margin: 0 auto; padding: 48px 24px; }
+
+h1 { font-size: 28px; color: var(--fg); margin-bottom: 8px; }
+h2 { font-size: 20px; color: var(--fg); margin: 32px 0 12px; padding-top: 16px; border-top: 1px solid var(--surface); }
+h3 { font-size: 16px; color: var(--fg2); margin: 24px 0 8px; }
+p { margin: 12px 0; color: var(--fg2); }
+ul, ol { margin: 12px 0 12px 24px; color: var(--fg2); }
+li { margin: 4px 0; }
+
+/* ── Tables ── */
+table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+th { text-align: left; padding: 8px 12px; background: var(--bg2); color: var(--fg3); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; border-bottom: 1px solid var(--surface); }
+td { padding: 8px 12px; border-bottom: 1px solid var(--surface); color: var(--fg2); font-size: 13px; }
+tr:hover td { background: var(--bg2); }
+
+/* ── Footer ── */
+footer {
+  border-top: 1px solid var(--surface); padding: 24px;
+  text-align: center; color: var(--fg3); font-size: 12px;
+  margin-top: 64px;
+}
+footer a { color: var(--fg3); }
+footer a:hover { color: var(--fg2); }
+
+/* ── Mobile ── */
+@media (max-width: 640px) {
+  nav { padding: 0 12px; }
+  nav .links { gap: 12px; }
+  .container, .container-wide { padding: 24px 16px; }
+  h1 { font-size: 22px; }
+}
+</style>
+{% block head %}{% endblock %}
+</head>
+<body>
+<nav>
+  <a href="/" class="logo">freeq<span>.at</span></a>
+  <div class="links">
+    <a href="/connect/" {% if nav_active == 'connect' %}class="active"{% endif %}>Connect</a>
+    <a href="/docs/" {% if nav_active == 'docs' %}class="active"{% endif %}>Docs</a>
+    <a href="/sdk/" {% if nav_active == 'sdk' %}class="active"{% endif %}>SDK</a>
+    <a href="/about/" {% if nav_active == 'about' %}class="active"{% endif %}>About</a>
+  </div>
+  <div class="spacer"></div>
+  <a href="https://github.com/chad/freeq" class="gh">GitHub ↗</a>
+</nav>
+
+{% block body %}{% endblock %}
+
+<footer>
+  <a href="https://github.com/chad/freeq">GitHub</a> ·
+  <a href="/docs/">Docs</a> ·
+  <a href="https://bsky.app/profile/freeq.at">Bluesky</a> ·
+  MIT License
+</footer>
+</body>
+</html>
