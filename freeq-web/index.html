@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>freeq</title>
+<meta name="description" content="IRC with AT Protocol identity — web client">
+<meta name="theme-color" content="#1e1e2e">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='80'>⚡</text></svg>">
 <style>
   :root {
     --bg: #1e1e2e; --bg2: #181825; --bg3: #11111b;
@@ -13,6 +16,7 @@
     --blue: #89b4fa; --mauve: #cba6f7; --teal: #94e2d5;
     --pink: #f5c2e7; --peach: #fab387; --sky: #89dceb;
     --font: 'SF Mono','Menlo','Consolas','Liberation Mono',monospace;
+    --radius: 6px;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -23,72 +27,90 @@
   ::-webkit-scrollbar { width: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--overlay); border-radius: 3px; }
+  ::selection { background: var(--blue); color: var(--bg3); }
 
   /* ── Connect screen ── */
   #connect-screen {
     display: flex; flex: 1; align-items: center; justify-content: center;
     background: var(--bg3);
+    flex-direction: column;
   }
   .connect-box {
     background: var(--bg); border: 1px solid var(--surface);
-    border-radius: 8px; padding: 32px; width: 420px; max-width: 95vw;
+    border-radius: 10px; padding: 36px; width: 440px; max-width: 95vw;
+    box-shadow: 0 8px 32px rgba(0,0,0,.4);
   }
-  .connect-box h1 { font-size: 22px; color: var(--blue); text-align: center; margin-bottom: 2px; }
-  .connect-box .sub { text-align: center; color: var(--fg3); font-size: 11px; margin-bottom: 20px; }
-  .field { margin-bottom: 12px; }
+  .connect-box h1 { font-size: 28px; color: var(--blue); text-align: center; margin-bottom: 0; letter-spacing: -0.5px; }
+  .connect-box .sub { text-align: center; color: var(--fg3); font-size: 12px; margin-bottom: 24px; }
+  .connect-box .sub a { color: var(--fg3); text-decoration: underline; }
+  .connect-box .sub a:hover { color: var(--fg2); }
+  .field { margin-bottom: 14px; }
   .field label { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .8px; color: var(--fg3); margin-bottom: 4px; }
-  .field input { width: 100%; background: var(--bg3); border: 1px solid var(--surface); border-radius: 4px; color: var(--fg); font-family: var(--font); font-size: 13px; padding: 8px 10px; outline: none; }
+  .field input { width: 100%; background: var(--bg3); border: 1px solid var(--surface); border-radius: 4px; color: var(--fg); font-family: var(--font); font-size: 13px; padding: 9px 12px; outline: none; transition: border-color .15s; }
   .field input:focus { border-color: var(--blue); }
   .field input::placeholder { color: var(--fg3); }
   .field-row { display: flex; gap: 12px; }
   .field-row .field { flex: 1; }
-  .section-label { font-size: 10px; color: var(--fg3); text-transform: uppercase; letter-spacing: .8px; margin: 16px 0 8px; padding-top: 12px; border-top: 1px solid var(--surface); }
-  .connect-box button { width: 100%; background: var(--blue); color: var(--bg3); border: none; border-radius: 4px; font-family: var(--font); font-size: 13px; font-weight: 700; padding: 10px; cursor: pointer; margin-top: 12px; }
+  .section-label { font-size: 10px; color: var(--fg3); text-transform: uppercase; letter-spacing: .8px; margin: 18px 0 10px; padding-top: 14px; border-top: 1px solid var(--surface); display: flex; align-items: center; gap: 6px; }
+  .section-label .optional { color: var(--overlay); font-style: italic; text-transform: none; letter-spacing: 0; }
+  .connect-box button { width: 100%; border: none; border-radius: var(--radius); font-family: var(--font); font-size: 13px; font-weight: 700; padding: 11px; cursor: pointer; margin-top: 8px; transition: opacity .15s, transform .1s; }
   .connect-box button:hover { opacity: .9; }
-  #connect-error { color: var(--red); font-size: 12px; text-align: center; margin-top: 8px; min-height: 18px; }
+  .connect-box button:active { transform: scale(.98); }
+  .connect-box .btn-primary { background: var(--blue); color: var(--bg3); }
+  .connect-box .btn-oauth { background: var(--mauve); color: var(--bg3); margin-top: 6px; }
+  #connect-error { color: var(--red); font-size: 12px; text-align: center; margin-top: 10px; min-height: 18px; }
+  .connect-footer { text-align: center; margin-top: 16px; font-size: 11px; color: var(--fg3); }
+  .connect-footer a { color: var(--fg3); text-decoration: none; }
+  .connect-footer a:hover { color: var(--fg2); text-decoration: underline; }
 
   /* ── Main layout ── */
   #app { display: none; flex-direction: column; flex: 1; min-height: 0; }
   #app.active { display: flex; }
 
   /* ── Header ── */
-  .topbar { background: var(--bg2); border-bottom: 1px solid var(--surface); padding: 6px 12px; display: flex; align-items: center; gap: 10px; flex-shrink: 0; height: 36px; }
-  .topbar .logo { color: var(--blue); font-weight: 700; font-size: 13px; }
-  .pill { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+  .topbar { background: var(--bg2); border-bottom: 1px solid var(--surface); padding: 0 12px; display: flex; align-items: center; gap: 8px; flex-shrink: 0; height: 40px; }
+  .topbar .logo { color: var(--blue); font-weight: 700; font-size: 14px; cursor: default; }
+  .pill { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600; white-space: nowrap; }
   .pill.ok { background: #1e3a2f; color: var(--green); }
   .pill.warn { background: #3a3a1e; color: var(--yellow); }
   .pill.err { background: #3a1e2f; color: var(--red); }
   .pill.auth { background: #1e2a3a; color: var(--mauve); }
   .topbar .nick { color: var(--mauve); font-weight: 600; font-size: 12px; }
   .topbar .topic-text { color: var(--fg3); font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .topbar .btn { background: none; border: 1px solid var(--surface); color: var(--fg3); font-family: var(--font); font-size: 10px; padding: 2px 8px; border-radius: 3px; cursor: pointer; }
-  .topbar .btn:hover { border-color: var(--fg3); color: var(--fg); }
-  .topbar .btn.danger:hover { border-color: var(--red); color: var(--red); }
+  .topbar .spacer { flex: 1; }
+  .topbar .btn { background: none; border: 1px solid var(--surface); color: var(--fg3); font-family: var(--font); font-size: 10px; padding: 3px 10px; border-radius: 4px; cursor: pointer; transition: all .15s; }
+  .topbar .btn:hover { border-color: var(--fg3); color: var(--fg); background: var(--surface); }
+  .topbar .btn.danger:hover { border-color: var(--red); color: var(--red); background: rgba(243,139,168,.1); }
+  .topbar .btn-icon { background: none; border: none; color: var(--fg3); cursor: pointer; font-size: 16px; padding: 4px; line-height: 1; }
+  .topbar .btn-icon:hover { color: var(--fg); }
 
   /* ── Body ── */
   .body { display: flex; flex: 1; min-height: 0; }
 
   /* ── Sidebar ── */
-  .sidebar { width: 180px; background: var(--bg2); border-right: 1px solid var(--surface); display: flex; flex-direction: column; flex-shrink: 0; overflow-y: auto; }
-  .sidebar .heading { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: var(--fg3); padding: 10px 10px 4px; }
-  .sidebar .item { display: flex; align-items: center; padding: 3px 10px; cursor: pointer; color: var(--fg2); font-size: 12px; border-left: 2px solid transparent; }
-  .sidebar .item:hover { background: var(--surface); }
+  .sidebar { width: 190px; background: var(--bg2); border-right: 1px solid var(--surface); display: flex; flex-direction: column; flex-shrink: 0; overflow-y: auto; }
+  .sidebar .heading { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: var(--fg3); padding: 12px 12px 4px; }
+  .sidebar .item { display: flex; align-items: center; padding: 4px 12px; cursor: pointer; color: var(--fg2); font-size: 12px; border-left: 2px solid transparent; transition: all .1s; }
+  .sidebar .item:hover { background: rgba(255,255,255,.03); }
   .sidebar .item.active { background: var(--surface); color: var(--blue); border-left-color: var(--blue); }
-  .sidebar .item .badge { margin-left: auto; background: var(--red); color: var(--bg); font-size: 9px; padding: 1px 5px; border-radius: 8px; font-weight: 700; min-width: 16px; text-align: center; }
+  .sidebar .item.has-mention { color: var(--red); font-weight: 600; }
+  .sidebar .item .badge { margin-left: auto; background: var(--red); color: var(--bg); font-size: 9px; padding: 1px 6px; border-radius: 8px; font-weight: 700; min-width: 16px; text-align: center; }
+  .sidebar .item .badge.mention { background: var(--red); }
+  .sidebar .item .badge.unread { background: var(--overlay); color: var(--fg3); }
 
   /* ── Messages ── */
   .center { flex: 1; display: flex; flex-direction: column; min-width: 0; }
   .messages { flex: 1; overflow-y: auto; padding: 8px 0; display: flex; flex-direction: column; }
-  .msg { padding: 1px 16px; line-height: 1.45; word-wrap: break-word; display: flex; gap: 8px; }
+  .msg { padding: 1px 16px; line-height: 1.5; word-wrap: break-word; display: flex; gap: 8px; }
   .msg:hover { background: rgba(255,255,255,.02); }
-  .msg .ts { color: var(--fg3); font-size: 10px; flex-shrink: 0; width: 38px; text-align: right; padding-top: 2px; }
+  .msg .ts { color: var(--fg3); font-size: 10px; flex-shrink: 0; width: 40px; text-align: right; padding-top: 2px; }
   .msg .nick { font-weight: 600; flex-shrink: 0; }
   .msg .text { flex: 1; min-width: 0; }
   .msg .text a { color: var(--blue); text-decoration: none; }
   .msg .text a:hover { text-decoration: underline; }
-  .msg .text .embed-img { max-width: min(480px, 100%); max-height: 320px; border-radius: 6px; margin: 4px 0 2px; display: block; cursor: pointer; }
+  .msg .text .embed-img { max-width: min(480px, 100%); max-height: 320px; border-radius: var(--radius); margin: 4px 0 2px; display: block; cursor: pointer; transition: outline .15s; }
   .msg .text .embed-img:hover { outline: 2px solid var(--blue); }
-  .msg .text .embed-video { max-width: min(480px, 100%); max-height: 360px; border-radius: 6px; margin: 4px 0 2px; display: block; }
+  .msg .text .embed-video { max-width: min(480px, 100%); max-height: 360px; border-radius: var(--radius); margin: 4px 0 2px; display: block; }
   .msg .text .embed-audio { max-width: min(400px, 100%); margin: 4px 0 2px; display: block; }
   .msg.action .text { font-style: italic; color: var(--fg2); }
   .msg.system { opacity: .6; }
@@ -96,31 +118,58 @@
   .msg.error .text { color: var(--red); }
   .msg.server .text { color: var(--teal); }
   .msg.self .nick { color: var(--mauve) !important; }
-  .msg.history { opacity: .7; }
+  .msg.history { opacity: .65; }
+  .msg.mention { background: rgba(137,180,250,.08); border-left: 2px solid var(--blue); padding-left: 14px; }
   .msg .day-sep { width: 100%; text-align: center; color: var(--fg3); font-size: 10px; padding: 6px 0 2px; }
+  .unread-sep { text-align: center; color: var(--red); font-size: 10px; padding: 4px 16px; opacity: .7; border-bottom: 1px solid rgba(243,139,168,.3); margin: 4px 16px; }
 
   /* ── Input ── */
-  .inputbar { display: flex; border-top: 1px solid var(--surface); background: var(--bg2); flex-shrink: 0; }
-  .inputbar input { flex: 1; background: transparent; border: none; color: var(--fg); font-family: var(--font); font-size: 13px; padding: 10px 16px; outline: none; }
+  .inputbar { display: flex; border-top: 1px solid var(--surface); background: var(--bg2); flex-shrink: 0; align-items: center; }
+  .inputbar input { flex: 1; background: transparent; border: none; color: var(--fg); font-family: var(--font); font-size: 13px; padding: 11px 16px; outline: none; }
   .inputbar input::placeholder { color: var(--fg3); }
+  .inputbar .send-btn { background: none; border: none; color: var(--blue); cursor: pointer; font-size: 16px; padding: 8px 12px; opacity: .6; transition: opacity .15s; }
+  .inputbar .send-btn:hover { opacity: 1; }
 
   /* ── Nicklist ── */
-  .nicklist { width: 160px; background: var(--bg2); border-left: 1px solid var(--surface); overflow-y: auto; flex-shrink: 0; }
-  .nicklist .heading { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: var(--fg3); padding: 10px 10px 4px; }
-  .nicklist .nick-item { padding: 2px 10px; font-size: 12px; color: var(--fg2); cursor: default; }
+  .nicklist { width: 170px; background: var(--bg2); border-left: 1px solid var(--surface); overflow-y: auto; flex-shrink: 0; transition: width .2s; }
+  .nicklist.hidden { width: 0; overflow: hidden; border: none; }
+  .nicklist .heading { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: var(--fg3); padding: 12px 12px 4px; }
+  .nicklist .nick-item { padding: 3px 12px; font-size: 12px; color: var(--fg2); cursor: pointer; border-radius: 3px; margin: 0 4px; transition: background .1s; }
+  .nicklist .nick-item:hover { background: var(--surface); }
   .nicklist .nick-item .prefix { font-weight: 700; }
   .nicklist .nick-item .prefix.op { color: var(--green); }
   .nicklist .nick-item .prefix.voice { color: var(--yellow); }
 
+  /* ── Switcher modal (Ctrl+K) ── */
+  .switcher-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 200; display: none; align-items: flex-start; justify-content: center; padding-top: 20vh; }
+  .switcher-overlay.active { display: flex; }
+  .switcher { background: var(--bg); border: 1px solid var(--surface); border-radius: 10px; width: 400px; max-width: 90vw; box-shadow: 0 16px 48px rgba(0,0,0,.5); overflow: hidden; }
+  .switcher input { width: 100%; background: var(--bg2); border: none; border-bottom: 1px solid var(--surface); color: var(--fg); font-family: var(--font); font-size: 14px; padding: 14px 16px; outline: none; }
+  .switcher .results { max-height: 300px; overflow-y: auto; }
+  .switcher .result { padding: 8px 16px; cursor: pointer; color: var(--fg2); font-size: 13px; display: flex; align-items: center; gap: 8px; }
+  .switcher .result:hover, .switcher .result.selected { background: var(--surface); color: var(--fg); }
+  .switcher .result .badge-sm { color: var(--fg3); font-size: 11px; margin-left: auto; }
+
+  /* ── Lightbox ── */
+  .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.85); z-index: 300; display: none; align-items: center; justify-content: center; cursor: zoom-out; }
+  .lightbox.active { display: flex; }
+  .lightbox img { max-width: 95vw; max-height: 95vh; border-radius: var(--radius); box-shadow: 0 8px 32px rgba(0,0,0,.5); }
+
+  /* ── Keyboard hints ── */
+  kbd { background: var(--surface); border: 1px solid var(--overlay); border-radius: 3px; padding: 1px 5px; font-size: 10px; color: var(--fg3); font-family: var(--font); }
+
   /* ── Mobile ── */
   @media (max-width: 700px) {
-    .sidebar { width: 140px; }
+    .sidebar { position: absolute; z-index: 50; height: calc(100% - 40px); top: 40px; left: 0; width: 200px; transform: translateX(-100%); transition: transform .2s; border-right: 1px solid var(--surface); }
+    .sidebar.open { transform: translateX(0); }
     .nicklist { display: none; }
     .msg .ts { display: none; }
+    .connect-box { padding: 24px; }
   }
   @media (max-width: 480px) {
-    .sidebar { display: none; }
     .topbar .topic-text { display: none; }
+    .topbar .btn { display: none; }
+    .topbar .btn-icon { display: block; }
   }
 </style>
 </head>
@@ -129,11 +178,11 @@
 <!-- Connect -->
 <div id="connect-screen">
   <div class="connect-box">
-    <h1>freeq</h1>
-    <div class="sub">IRC · AT Protocol · E2EE</div>
+    <h1>⚡ freeq</h1>
+    <div class="sub">IRC with identity · <a href="https://freeq.at" target="_blank">freeq.at</a></div>
     <div class="field">
       <label>Server</label>
-      <input id="f-server" placeholder="ws://host:port/irc">
+      <input id="f-server" placeholder="wss://irc.freeq.at/irc">
     </div>
     <div class="field-row">
       <div class="field">
@@ -142,29 +191,37 @@
       </div>
       <div class="field">
         <label>Channels</label>
-        <input id="f-channels" value="#freeq" placeholder="#chan1, #chan2">
+        <input id="f-channels" value="#freeq" placeholder="#chan1,#chan2">
       </div>
     </div>
-    <div class="section-label">Bluesky Login (optional)</div>
+    <div class="section-label">Bluesky Login <span class="optional">(optional)</span></div>
     <div class="field">
       <label>Handle</label>
       <input id="f-at-handle" placeholder="you.bsky.social">
     </div>
-    <button onclick="doConnect()">Connect as Guest</button>
-    <button id="btn-oauth" onclick="doOAuthConnect()" style="display:none; background:var(--mauve); margin-top:4px">Login with Bluesky</button>
+    <button class="btn-primary" onclick="doConnect()">Connect as Guest</button>
+    <button id="btn-oauth" class="btn-oauth" onclick="doOAuthConnect()" style="display:none">Sign in with Bluesky</button>
     <div id="connect-error"></div>
+    <div class="connect-footer">
+      <a href="https://freeq.at/connect/">Connection guide</a> ·
+      <a href="https://freeq.at/docs/">Docs</a> ·
+      <a href="https://github.com/chad/freeq">GitHub</a>
+    </div>
   </div>
 </div>
 
 <!-- App -->
 <div id="app">
   <div class="topbar">
+    <button class="btn-icon" id="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar">☰</button>
     <span class="logo">freeq</span>
     <span id="status-pill" class="pill err">connecting</span>
     <span id="auth-pill" class="pill auth" style="display:none"></span>
     <span id="hdr-nick" class="nick"></span>
     <span id="hdr-topic" class="topic-text"></span>
-    <button class="btn" onclick="toggleNicklist()">Users</button>
+    <span class="spacer"></span>
+    <button class="btn" onclick="toggleNicklist()" title="Toggle user list">Users</button>
+    <button class="btn" onclick="showSwitcher()" title="Ctrl+K">⌘K</button>
     <button class="btn danger" onclick="doDisconnect()">Quit</button>
   </div>
   <div class="body">
@@ -172,12 +229,26 @@
     <div class="center">
       <div class="messages" id="messages"></div>
       <div class="inputbar">
-        <input id="input" placeholder="Type a message or /command…" autocomplete="off" autofocus
+        <input id="input" placeholder="Type a message or /command…" autocomplete="off" spellcheck="true" autofocus
                onkeydown="handleInputKey(event)">
+        <button class="send-btn" onclick="sendInput()" title="Send">↵</button>
       </div>
     </div>
     <div class="nicklist" id="nicklist"></div>
   </div>
+</div>
+
+<!-- Switcher (Ctrl+K) -->
+<div class="switcher-overlay" id="switcher-overlay" onclick="closeSwitcher()">
+  <div class="switcher" onclick="event.stopPropagation()">
+    <input id="switcher-input" placeholder="Switch to channel or user…" oninput="filterSwitcher()" onkeydown="switcherKey(event)">
+    <div class="results" id="switcher-results"></div>
+  </div>
+</div>
+
+<!-- Lightbox -->
+<div class="lightbox" id="lightbox" onclick="closeLightbox()">
+  <img id="lightbox-img" src="">
 </div>
 
 <script>
@@ -190,17 +261,36 @@ let atHandle = '', atDid = '', atAccessJwt = '', atPdsUrl = '';
 let capNegotiating = false, wantedCaps = [], ackedCaps = new Set();
 let saslInProgress = false;
 let oauthPopup = null;
+let reconnectTimer = null, reconnectUrl = '', reconnectAttempts = 0;
 const buffers = {};
 let activeBuffer = 'server';
 let inputHistory = [], historyPos = -1;
+let switcherIdx = 0;
+let notificationsAllowed = false;
 
 function buf(name) {
   const key = name.toLowerCase();
   if (!buffers[key]) {
-    buffers[key] = { name, messages: [], users: new Set(), topic: '', unread: 0, inBatch: false, batchMsgs: [] };
+    buffers[key] = { name, messages: [], users: new Set(), topic: '', unread: 0, mentions: 0, inBatch: false, batchMsgs: [] };
     renderSidebar();
   }
   return buffers[key];
+}
+
+// Request notification permission
+if ('Notification' in window && Notification.permission === 'default') {
+  // Wait for first user interaction to ask
+  document.addEventListener('click', function askNotif() {
+    Notification.requestPermission().then(p => { notificationsAllowed = p === 'granted'; });
+    document.removeEventListener('click', askNotif);
+  }, { once: true });
+} else if ('Notification' in window) {
+  notificationsAllowed = Notification.permission === 'granted';
+}
+
+function notify(title, body) {
+  if (!notificationsAllowed || document.hasFocus()) return;
+  try { new Notification(title, { body, icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="80">⚡</text></svg>' }); } catch(e) {}
 }
 
 // ── Connect ──────────────────────────────────────────────────────
@@ -212,10 +302,16 @@ async function doConnect() {
 
   if (!url) { showErr('Enter a WebSocket URL'); return; }
   showErr('Connecting…');
+  reconnectUrl = url;
+  connectToUrl(url);
+}
 
+function connectToUrl(url) {
   try { ws = new WebSocket(url); } catch(e) { showErr('Bad URL: ' + e.message); return; }
 
   ws.onopen = () => {
+    reconnectAttempts = 0;
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     document.getElementById('connect-screen').style.display = 'none';
     document.getElementById('app').classList.add('active');
     setStatus('ok', 'connected');
@@ -224,7 +320,6 @@ async function doConnect() {
     switchBuffer('server');
     sysMsg('server', 'Connecting to ' + url);
 
-    // IRC registration with CAP negotiation
     raw('CAP LS 302');
     raw('NICK ' + nick);
     raw('USER ' + nick + ' 0 * :freeq web client');
@@ -236,17 +331,34 @@ async function doConnect() {
 
   ws.onclose = () => {
     setStatus('err', 'disconnected');
-    sysMsg('server', 'Connection closed');
-    registered = false;
+    if (registered) {
+      sysMsg('server', 'Connection lost. Reconnecting…');
+      registered = false;
+      scheduleReconnect();
+    }
   };
 
   ws.onerror = () => {
-    if (!registered) showErr('Connection failed. Is the server running with --web-addr?');
+    if (!registered && !reconnectTimer) showErr('Connection failed. Check the server address.');
   };
 }
 
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  reconnectAttempts++;
+  const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 30000);
+  setStatus('warn', 'reconnecting (' + Math.round(delay/1000) + 's)');
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    sysMsg('server', 'Reconnecting… (attempt ' + reconnectAttempts + ')');
+    connectToUrl(reconnectUrl);
+  }, delay);
+}
+
 function doDisconnect() {
-  if (ws) { raw('QUIT :Leaving'); ws.close(); ws = null; }
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  reconnectAttempts = 0;
+  if (ws) { try { raw('QUIT :Leaving'); } catch(e) {} ws.close(); ws = null; }
   document.getElementById('app').classList.remove('active');
   document.getElementById('connect-screen').style.display = '';
   showErr('');
@@ -264,7 +376,6 @@ function showErr(t) { document.getElementById('connect-error').textContent = t; 
 function doOAuthConnect() {
   atHandle = document.getElementById('f-at-handle').value.trim();
   if (!atHandle) { showErr('Enter your Bluesky handle first'); return; }
-
   showErr('Opening Bluesky login…');
   const serverUrl = document.getElementById('f-server').value.trim().replace(/^ws/, 'http').replace(/\/irc$/, '');
   const authUrl = serverUrl + '/auth/login?handle=' + encodeURIComponent(atHandle);
@@ -272,20 +383,16 @@ function doOAuthConnect() {
   oauthPopup = window.open(authUrl, 'freeq-auth', 'width=500,height=600');
 }
 
-// Listen for OAuth result via BroadcastChannel
 try {
   const bc = new BroadcastChannel('freeq-oauth');
   bc.onmessage = (e) => {
     if (e.data && e.data.type === 'freeq-oauth' && e.data.result) handleOAuthResult(e.data.result);
   };
 } catch(e) {}
-
-// Fallback: window.opener postMessage
 window.addEventListener('message', (e) => {
   if (e.data && e.data.type === 'freeq-oauth' && e.data.result) handleOAuthResult(e.data.result);
 });
 
-// Fallback: poll localStorage (for browsers without BroadcastChannel)
 let oauthPollTimer = null;
 function startOAuthPoll() {
   localStorage.removeItem('freeq-oauth-result');
@@ -301,21 +408,16 @@ function startOAuthPoll() {
 
 function handleOAuthResult(r) {
   if (oauthPollTimer) { clearInterval(oauthPollTimer); oauthPollTimer = null; }
-  atDid = r.did;
-  atAccessJwt = r.access_jwt;
-  atPdsUrl = r.pds_url;
+  atDid = r.did; atAccessJwt = r.access_jwt; atPdsUrl = r.pds_url;
   atHandle = r.handle || atHandle;
-  showErr('OAuth successful! Connecting…');
+  showErr('Authenticated! Connecting…');
   if (oauthPopup) { try { oauthPopup.close(); } catch(e) {} oauthPopup = null; }
   doConnect();
 }
 
 // ── IRC send ─────────────────────────────────────────────────────
 
-function raw(line) {
-  if (!ws || ws.readyState !== 1) return;
-  ws.send(line);
-}
+function raw(line) { if (ws && ws.readyState === 1) ws.send(line); }
 
 // ── IRC parser ───────────────────────────────────────────────────
 
@@ -344,19 +446,17 @@ function parse(line) {
 
 function pnick(prefix) { const i = prefix.indexOf('!'); return i > 0 ? prefix.slice(0, i) : prefix; }
 
-// ── Handle IRC line ──────────────────────────────────────────────
+// ── Batches ──────────────────────────────────────────────────────
 
-// Active batch tracking
-const batches = {}; // batchId -> { type, target, messages[] }
+const batches = {};
+
+// ── Handle IRC line ──────────────────────────────────────────────
 
 function handleLine(rawLine) {
   const m = parse(rawLine);
   const p = m.params, from = pnick(m.prefix);
-
-  // Time from server-time tag
   const serverTime = m.tags.time ? new Date(m.tags.time) : null;
   const batchId = m.tags.batch || null;
-  const isHistorical = !!batchId;
 
   switch (m.command) {
 
@@ -366,8 +466,8 @@ function handleLine(rawLine) {
       if (sub === 'LS') {
         const available = p.slice(2).join(' ');
         wantedCaps = [];
-        ['message-tags', 'server-time', 'batch', 'multi-prefix', 'echo-message',
-         'draft/chathistory', 'account-notify', 'extended-join'].forEach(c => {
+        ['message-tags','server-time','batch','multi-prefix','echo-message',
+         'draft/chathistory','account-notify','extended-join'].forEach(c => {
           if (available.includes(c)) wantedCaps.push(c);
         });
         if (atAccessJwt && available.includes('sasl')) wantedCaps.push('sasl');
@@ -376,68 +476,41 @@ function handleLine(rawLine) {
       } else if (sub === 'ACK') {
         p.slice(2).join(' ').split(' ').forEach(c => ackedCaps.add(c));
         sysMsg('server', 'Capabilities: ' + [...ackedCaps].join(' '));
-        if (ackedCaps.has('sasl') && atAccessJwt) {
-          saslInProgress = true;
-          raw('AUTHENTICATE ATPROTO-CHALLENGE');
-        } else {
-          raw('CAP END');
-        }
-      } else if (sub === 'NAK') {
-        raw('CAP END');
-      }
+        if (ackedCaps.has('sasl') && atAccessJwt) { saslInProgress = true; raw('AUTHENTICATE ATPROTO-CHALLENGE'); }
+        else raw('CAP END');
+      } else if (sub === 'NAK') { raw('CAP END'); }
       break;
     }
 
     // ── SASL ──
     case 'AUTHENTICATE': {
       if (saslInProgress && atAccessJwt && p[0] && p[0] !== '+') {
-        // Server sent base64url-encoded challenge JSON.
-        // We respond with a ChallengeResponse JSON (base64url-encoded).
-        const response = {
-          did: atDid,
-          method: 'pds-session',
-          signature: atAccessJwt,
-          pds_url: atPdsUrl,
-        };
-        const json = JSON.stringify(response);
-        // base64url encode (no padding)
-        const encoded = btoa(json).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-        if (encoded.length <= 400) {
-          raw('AUTHENTICATE ' + encoded);
-        } else {
-          for (let i = 0; i < encoded.length; i += 400) {
-            raw('AUTHENTICATE ' + encoded.slice(i, i + 400));
-          }
-          raw('AUTHENTICATE +');
-        }
+        const response = { did: atDid, method: 'pds-session', signature: atAccessJwt, pds_url: atPdsUrl };
+        const encoded = btoa(JSON.stringify(response)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        if (encoded.length <= 400) { raw('AUTHENTICATE ' + encoded); }
+        else { for (let i = 0; i < encoded.length; i += 400) raw('AUTHENTICATE ' + encoded.slice(i, i + 400)); raw('AUTHENTICATE +'); }
       }
       break;
     }
-    case '900': { // RPL_LOGGEDIN
+    case '900': {
       sysMsg('server', p[p.length - 1]);
-      document.getElementById('auth-pill').style.display = '';
-      document.getElementById('auth-pill').textContent = atDid.slice(0, 20) + '…';
+      const authPill = document.getElementById('auth-pill');
+      authPill.style.display = '';
+      authPill.textContent = atHandle || (atDid.length > 24 ? atDid.slice(0, 24) + '…' : atDid);
+      authPill.title = atDid;
       break;
     }
     case '903': sysMsg('server', '✓ SASL authentication successful'); saslInProgress = false; raw('CAP END'); break;
-    case '904': sysMsg('server', '✗ SASL authentication failed'); saslInProgress = false; raw('CAP END'); break;
+    case '904': sysMsg('server', '✗ SASL authentication failed: ' + (p[1] || '')); saslInProgress = false; raw('CAP END'); break;
 
     // ── BATCH ──
     case 'BATCH': {
       const ref = p[0];
       if (ref.startsWith('+')) {
-        const id = ref.slice(1);
-        batches[id] = { type: p[1] || '', target: p[2] || '', messages: [] };
+        batches[ref.slice(1)] = { type: p[1] || '', target: p[2] || '', messages: [] };
       } else if (ref.startsWith('-')) {
-        const id = ref.slice(1);
-        const batch = batches[id];
-        if (batch) {
-          // Replay batch messages
-          batch.messages.forEach(msg => {
-            addMsg(msg.buffer, msg.time, msg.sender, msg.text, msg.cls + ' history');
-          });
-          delete batches[id];
-        }
+        const id = ref.slice(1), batch = batches[id];
+        if (batch) { batch.messages.forEach(msg => addMsg(msg.buffer, msg.time, msg.sender, msg.text, msg.cls + ' history', msg.mediaUrl, msg.mediaAlt)); delete batches[id]; }
       }
       break;
     }
@@ -455,34 +528,22 @@ function handleLine(rawLine) {
       sysMsg('server', p.slice(1).join(' ')); break;
     case '375': case '372': sysMsg('server', p[p.length - 1]); break;
     case '376': break;
-
     case '433': nick += '_'; raw('NICK ' + nick); document.getElementById('hdr-nick').textContent = nick; break;
 
     case 'NICK': {
       const newNick = p[0];
       if (from === nick) { nick = newNick; document.getElementById('hdr-nick').textContent = nick; }
       for (const b of Object.values(buffers)) {
-        for (const pfx of ['', '@', '+']) {
-          if (b.users.has(pfx + from)) { b.users.delete(pfx + from); b.users.add(pfx + newNick); }
-        }
+        for (const pfx of ['', '@', '+']) { if (b.users.has(pfx + from)) { b.users.delete(pfx + from); b.users.add(pfx + newNick); } }
       }
       renderNicklist();
       break;
     }
 
-    // ── JOIN ──
     case 'JOIN': {
-      const chan = p[0];
-      // extended-join: JOIN #channel account :realname
-      const account = p[1] || null;
-      if (from === nick) {
-        buf(chan); switchBuffer(chan);
-        sysMsg(chan, 'You joined ' + chan);
-      } else {
-        buf(chan).users.add(from);
-        const extra = account && account !== '*' ? ' (' + account + ')' : '';
-        sysMsg(chan, from + extra + ' joined');
-      }
+      const chan = p[0], account = p[1] || null;
+      if (from === nick) { buf(chan); switchBuffer(chan); sysMsg(chan, 'You joined ' + chan); }
+      else { buf(chan).users.add(from); const extra = account && account !== '*' ? ' (' + account + ')' : ''; sysMsg(chan, from + extra + ' joined'); }
       renderNicklist();
       break;
     }
@@ -490,14 +551,10 @@ function handleLine(rawLine) {
     case 'PART': {
       const chan = p[0], reason = p[1] || '';
       if (from === nick) {
-        sysMsg(chan, 'You left ' + chan);
-        delete buffers[chan.toLowerCase()];
+        sysMsg(chan, 'You left ' + chan); delete buffers[chan.toLowerCase()];
         if (activeBuffer === chan.toLowerCase()) switchBuffer('server');
         renderSidebar();
-      } else {
-        rmUser(chan, from);
-        sysMsg(chan, from + ' left' + (reason ? ' (' + reason + ')' : ''));
-      }
+      } else { rmUser(chan, from); sysMsg(chan, from + ' left' + (reason ? ' (' + reason + ')' : '')); }
       renderNicklist();
       break;
     }
@@ -505,10 +562,7 @@ function handleLine(rawLine) {
     case 'QUIT': {
       const reason = p[0] || '';
       for (const [, b] of Object.entries(buffers)) {
-        if (hasUser(b, from)) {
-          rmUserFromBuf(b, from);
-          pushBufMsg(b, null, '←', from + ' quit' + (reason ? ' (' + reason + ')' : ''), 'system');
-        }
+        if (hasUser(b, from)) { rmUserFromBuf(b, from); pushBufMsg(b, null, '←', from + ' quit' + (reason ? ' (' + reason + ')' : ''), 'system'); }
       }
       renderNicklist();
       break;
@@ -521,10 +575,7 @@ function handleLine(rawLine) {
         delete buffers[chan.toLowerCase()];
         if (activeBuffer === chan.toLowerCase()) switchBuffer('server');
         renderSidebar();
-      } else {
-        rmUser(chan, kicked);
-        sysMsg(chan, kicked + ' kicked by ' + from + (reason ? ' (' + reason + ')' : ''));
-      }
+      } else { rmUser(chan, kicked); sysMsg(chan, kicked + ' kicked by ' + from + (reason ? ' (' + reason + ')' : '')); }
       renderNicklist();
       break;
     }
@@ -536,19 +587,27 @@ function handleLine(rawLine) {
       const bufName = (target.startsWith('#') || target.startsWith('&')) ? target : from;
       buf(bufName);
       const time = serverTime;
-
-      // Extract media from IRCv3 tags
       const mediaUrl = m.tags['media-url'] || '';
       const mediaAlt = m.tags['media-alt'] || '';
+      const isMention = !isAction && from !== nick && text.toLowerCase().includes(nick.toLowerCase());
 
       if (batchId && batches[batchId]) {
-        const cls = isAction ? 'action' : (from === nick ? 'self' : '');
-        const msgText = isAction ? text.slice(8, -1) : text;
-        batches[batchId].messages.push({ buffer: bufName.toLowerCase(), time, sender: from, text: msgText, cls, mediaUrl, mediaAlt });
+        const cls = isAction ? 'action' : (from === nick ? 'self' : (isMention ? 'mention' : ''));
+        batches[batchId].messages.push({ buffer: bufName.toLowerCase(), time, sender: from, text: isAction ? text.slice(8, -1) : text, cls, mediaUrl, mediaAlt });
       } else if (isAction) {
         addMsg(bufName, time, from, text.slice(8, -1), 'action', mediaUrl, mediaAlt);
       } else {
-        addMsg(bufName, time, from, text, from === nick ? 'self' : '', mediaUrl, mediaAlt);
+        addMsg(bufName, time, from, text, from === nick ? 'self' : (isMention ? 'mention' : ''), mediaUrl, mediaAlt);
+      }
+      // Mention notification
+      if (isMention && from !== nick) {
+        notify(from + ' in ' + bufName, text);
+        const b = buffers[bufName.toLowerCase()];
+        if (b && activeBuffer !== bufName.toLowerCase()) { b.mentions++; renderSidebar(); }
+      }
+      // PM notification
+      if (!target.startsWith('#') && !target.startsWith('&') && from !== nick) {
+        notify('PM from ' + from, text);
       }
       break;
     }
@@ -560,133 +619,118 @@ function handleLine(rawLine) {
       break;
     }
 
-    // ── TOPIC ──
     case 'TOPIC': {
       const chan = p[0], text = p[1] || '';
-      buf(chan).topic = text;
-      sysMsg(chan, from + ' set topic: ' + text);
+      buf(chan).topic = text; sysMsg(chan, from + ' set topic: ' + text);
       if (activeBuffer === chan.toLowerCase()) document.getElementById('hdr-topic').textContent = text;
       break;
     }
     case '332': {
       const chan = p[1], text = p[2] || '';
-      buf(chan).topic = text;
-      sysMsg(chan, 'Topic: ' + text);
+      buf(chan).topic = text; sysMsg(chan, 'Topic: ' + text);
       if (activeBuffer === chan.toLowerCase()) document.getElementById('hdr-topic').textContent = text;
       break;
     }
     case '333': break;
 
-    // ── NAMES ──
     case '353': {
       const chan = p[2], nicks = (p[3] || '').split(' ').filter(Boolean);
-      const b = buf(chan);
-      nicks.forEach(n => b.users.add(n));
+      nicks.forEach(n => buf(chan).users.add(n));
       renderNicklist();
       break;
     }
     case '366': break;
 
-    // ── MODE ──
     case 'MODE': {
       const target = p[0];
-      if (target.startsWith('#') || target.startsWith('&'))
-        sysMsg(target, from + ' set mode ' + p.slice(1).join(' '));
+      if (target.startsWith('#') || target.startsWith('&')) sysMsg(target, from + ' set mode ' + p.slice(1).join(' '));
       break;
     }
 
-    // ── ACCOUNT ──
     case 'ACCOUNT': {
       const account = p[0];
-      // Find channels with this user and notify
       for (const [, b] of Object.entries(buffers)) {
-        if (hasUser(b, from)) {
-          pushBufMsg(b, null, '*', from + ' is now authenticated as ' + account, 'system');
-        }
+        if (hasUser(b, from)) pushBufMsg(b, null, '*', from + ' is now authenticated as ' + account, 'system');
       }
       break;
     }
 
-    // ── WHOIS ──
-    case '311': sysMsg('server', 'WHOIS ' + p[1] + ': ' + p[5]); break;
-    case '312': sysMsg('server', '  server: ' + p[2]); break;
-    case '319': sysMsg('server', '  channels: ' + p[2]); break;
-    case '330': sysMsg('server', '  account: ' + p[2]); break;
-    case '671': sysMsg('server', '  ' + p[2]); break;
-    case '318': break;
+    // ── WHOIS — show inline ──
+    case '311': {
+      const target = p[1];
+      sysMsg(activeBuffer, '── WHOIS ' + target + ' ──');
+      sysMsg(activeBuffer, '  ' + p[1] + '!' + p[2] + '@' + p[3] + ' — ' + p[5]);
+      break;
+    }
+    case '312': sysMsg(activeBuffer, '  server: ' + p[2] + ' (' + (p[3]||'') + ')'); break;
+    case '319': sysMsg(activeBuffer, '  channels: ' + p[2]); break;
+    case '330': sysMsg(activeBuffer, '  account: ' + p[2]); break;
+    case '671': sysMsg(activeBuffer, '  ' + p[2]); break;
+    case '672': sysMsg(activeBuffer, '  iroh: ' + p[2]); break;
+    case '318': sysMsg(activeBuffer, '── end WHOIS ──'); break;
 
-    // ── Errors ──
-    case '401': sysMsg('server', 'No such nick: ' + p[1]); break;
-    case '473': sysMsg('server', 'Cannot join ' + p[1] + ' (invite only)'); break;
-    case '474': sysMsg('server', 'Cannot join ' + p[1] + ' (banned)'); break;
-    case '475': sysMsg('server', 'Cannot join ' + p[1] + ' (bad key)'); break;
+    case '401': sysMsg(activeBuffer, 'No such nick: ' + p[1]); break;
+    case '473': sysMsg(activeBuffer, 'Cannot join ' + p[1] + ' (invite only)'); break;
+    case '474': sysMsg(activeBuffer, 'Cannot join ' + p[1] + ' (banned)'); break;
+    case '475': sysMsg(activeBuffer, 'Cannot join ' + p[1] + ' (bad key)'); break;
     case '482': pushChanMsg(p[1], null, '!', p[2] || 'Not operator', 'error'); break;
 
     case '367': pushChanMsg(p[1], null, '*', 'Ban: ' + p[2], 'system'); break;
     case '368': break;
 
-    // ── LIST ──
     case '322': sysMsg('server', '  ' + p[1] + ' (' + p[2] + ') ' + (p[3] || '')); break;
     case '321': sysMsg('server', 'Channel list:'); break;
     case '323': break;
+
+    // WHO replies
+    case '352': sysMsg(activeBuffer, '  ' + p[5] + ' (' + p[2] + '@' + p[3] + ') ' + (p[7]||'').replace(/^\d+ /, '')); break;
+    case '315': break;
 
     default:
       if (/^\d{3}$/.test(m.command)) sysMsg('server', '[' + m.command + '] ' + p.slice(1).join(' '));
   }
 }
 
-// ── User helpers ─────────────────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────
 
 function hasUser(b, n) { return b.users.has(n) || b.users.has('@' + n) || b.users.has('+' + n); }
 function rmUser(chan, n) { rmUserFromBuf(buffers[chan.toLowerCase()], n); }
 function rmUserFromBuf(b, n) { if (!b) return; b.users.delete(n); b.users.delete('@' + n); b.users.delete('+' + n); }
 
-// ── Message helpers ──────────────────────────────────────────────
-
 const COLORS = ['var(--red)','var(--green)','var(--yellow)','var(--blue)','var(--mauve)','var(--teal)','var(--pink)','var(--peach)','var(--sky)'];
 function ncolor(n) { let h = 0; for (let i = 0; i < n.length; i++) h = n.charCodeAt(i) + ((h << 5) - h); return COLORS[Math.abs(h) % COLORS.length]; }
 function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-const IMG_RE = /\.(png|jpe?g|gif|webp|svg|avif|ico|bmp)(\?[^\s]*)?$/i;
+
+const IMG_RE = /\.(png|jpe?g|gif|webp|svg|avif)(\?[^\s]*)?$/i;
 const VIDEO_RE = /\.(mp4|webm|mov)(\?[^\s]*)?$/i;
 const AUDIO_RE = /\.(mp3|ogg|wav|flac|m4a|aac)(\?[^\s]*)?$/i;
 
 function linkify(s) {
   return esc(s).replace(/(https?:\/\/[^\s<]+)/g, (url) => {
-    const clean = url.replace(/[).,;:!?]+$/, ''); // strip trailing punctuation
+    const clean = url.replace(/[).,;:!?]+$/, '');
     const link = '<a href="' + clean + '" target="_blank" rel="noopener">' + clean + '</a>';
-    if (IMG_RE.test(clean)) {
-      return link + '<br><img class="embed-img" src="' + clean + '" loading="lazy" alt="">';
-    }
-    if (VIDEO_RE.test(clean)) {
-      return link + '<br><video class="embed-video" src="' + clean + '" controls preload="metadata"></video>';
-    }
-    if (AUDIO_RE.test(clean)) {
-      return link + '<br><audio class="embed-audio" src="' + clean + '" controls preload="metadata"></audio>';
-    }
+    if (IMG_RE.test(clean)) return link + '<br><img class="embed-img" src="' + clean + '" loading="lazy" alt="" onclick="openLightbox(\'' + clean.replace(/'/g, "\\'") + '\')">';
+    if (VIDEO_RE.test(clean)) return link + '<br><video class="embed-video" src="' + clean + '" controls preload="metadata"></video>';
+    if (AUDIO_RE.test(clean)) return link + '<br><audio class="embed-audio" src="' + clean + '" controls preload="metadata"></audio>';
     return link;
   });
 }
+
 function timeStr(d) { if (!d) d = new Date(); return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0'); }
-
 function sysMsg(buffer, text) { addMsg(buffer, null, '—', text, 'system'); }
-
-function pushChanMsg(chan, time, sender, text, cls) {
-  const b = buf(chan);
-  pushBufMsg(b, time, sender, text, cls);
-}
+function pushChanMsg(chan, time, sender, text, cls) { pushBufMsg(buf(chan), time, sender, text, cls); }
 
 function pushBufMsg(b, time, sender, text, cls, mediaUrl, mediaAlt) {
   const entry = { time: timeStr(time), sender, text, cls: cls || '', mediaUrl: mediaUrl || '', mediaAlt: mediaAlt || '' };
   b.messages.push(entry);
-  if (b.messages.length > 1000) b.messages.shift();
+  if (b.messages.length > 2000) b.messages.shift();
   if (b === buffers[activeBuffer]) appendEl(entry);
   else { b.unread++; renderSidebar(); }
 }
 
 function addMsg(buffer, time, sender, text, cls, mediaUrl, mediaAlt) {
-  const key = buffer.toLowerCase();
   buf(buffer);
-  pushBufMsg(buffers[key], time, sender, text, cls, mediaUrl, mediaAlt);
+  pushBufMsg(buffers[buffer.toLowerCase()], time, sender, text, cls, mediaUrl, mediaAlt);
 }
 
 function appendEl(e) {
@@ -698,26 +742,73 @@ function appendEl(e) {
   const nickH = e.cls.includes('action') ? '* ' + esc(e.sender) : esc(e.sender);
   let mediaHtml = '';
   if (e.mediaUrl) {
-    // media-url IRCv3 tag — render link + inline embed
     const alt = e.mediaAlt ? ' alt="' + esc(e.mediaAlt) + '"' : ' alt=""';
     mediaHtml = '<br><a href="' + esc(e.mediaUrl) + '" target="_blank" rel="noopener">' + esc(e.mediaUrl) + '</a>';
-    if (VIDEO_RE.test(e.mediaUrl)) {
-      mediaHtml += '<br><video class="embed-video" src="' + esc(e.mediaUrl) + '" controls preload="metadata"></video>';
-    } else if (AUDIO_RE.test(e.mediaUrl)) {
-      mediaHtml += '<br><audio class="embed-audio" src="' + esc(e.mediaUrl) + '" controls preload="metadata"></audio>';
-    } else {
-      // Treat as image (media-url tag confirms it's media)
-      mediaHtml += '<br><img class="embed-img" src="' + esc(e.mediaUrl) + '" loading="lazy"' + alt + '>';
-    }
+    if (VIDEO_RE.test(e.mediaUrl)) mediaHtml += '<br><video class="embed-video" src="' + esc(e.mediaUrl) + '" controls preload="metadata"></video>';
+    else if (AUDIO_RE.test(e.mediaUrl)) mediaHtml += '<br><audio class="embed-audio" src="' + esc(e.mediaUrl) + '" controls preload="metadata"></audio>';
+    else mediaHtml += '<br><img class="embed-img" src="' + esc(e.mediaUrl) + '" loading="lazy"' + alt + ' onclick="openLightbox(\'' + esc(e.mediaUrl).replace(/'/g, "\\'") + '\')">';
   }
-  div.innerHTML = '<span class="ts">' + e.time + '</span><span class="nick" style="color:' + color + '">' + nickH + '</span><span class="text">' + linkify(e.text) + mediaHtml + '</span>';
+  // Highlight mentions of own nick in text
+  let textHtml = linkify(e.text);
+  if (nick && !e.cls.includes('system') && !e.cls.includes('self')) {
+    const re = new RegExp('(\\b' + esc(nick).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b)', 'gi');
+    textHtml = textHtml.replace(re, '<strong style="color:var(--yellow)">$1</strong>');
+  }
+  div.innerHTML = '<span class="ts">' + e.time + '</span><span class="nick" style="color:' + color + '">' + nickH + '</span><span class="text">' + textHtml + mediaHtml + '</span>';
   c.appendChild(div);
-  // Click embedded image → open full size
-  div.querySelectorAll('.embed-img').forEach(img => {
-    img.onclick = () => window.open(img.src, '_blank');
-    img.onerror = () => img.remove();
-  });
+  div.querySelectorAll('.embed-img').forEach(img => { img.onerror = () => img.remove(); });
   if (atBottom) c.scrollTop = c.scrollHeight;
+}
+
+// ── Lightbox ─────────────────────────────────────────────────────
+
+function openLightbox(src) {
+  document.getElementById('lightbox-img').src = src;
+  document.getElementById('lightbox').classList.add('active');
+}
+function closeLightbox() {
+  document.getElementById('lightbox').classList.remove('active');
+  document.getElementById('lightbox-img').src = '';
+}
+
+// ── Switcher (Ctrl+K) ───────────────────────────────────────────
+
+function showSwitcher() {
+  document.getElementById('switcher-overlay').classList.add('active');
+  const input = document.getElementById('switcher-input');
+  input.value = '';
+  input.focus();
+  switcherIdx = 0;
+  filterSwitcher();
+}
+
+function closeSwitcher() {
+  document.getElementById('switcher-overlay').classList.remove('active');
+  document.getElementById('input').focus();
+}
+
+function filterSwitcher() {
+  const q = document.getElementById('switcher-input').value.toLowerCase();
+  const el = document.getElementById('switcher-results');
+  el.innerHTML = '';
+  const keys = Object.keys(buffers).filter(k => !q || k.includes(q) || buffers[k].name.toLowerCase().includes(q));
+  keys.forEach((key, i) => {
+    const b = buffers[key];
+    const div = document.createElement('div');
+    div.className = 'result' + (i === switcherIdx ? ' selected' : '');
+    const badge = b.unread > 0 ? '<span class="badge-sm">' + b.unread + '</span>' : '';
+    div.innerHTML = esc(b.name) + badge;
+    div.onclick = () => { switchBuffer(key); closeSwitcher(); };
+    el.appendChild(div);
+  });
+}
+
+function switcherKey(e) {
+  const results = document.querySelectorAll('#switcher-results .result');
+  if (e.key === 'Escape') { closeSwitcher(); e.preventDefault(); }
+  else if (e.key === 'ArrowDown') { switcherIdx = Math.min(switcherIdx + 1, results.length - 1); filterSwitcher(); e.preventDefault(); }
+  else if (e.key === 'ArrowUp') { switcherIdx = Math.max(switcherIdx - 1, 0); filterSwitcher(); e.preventDefault(); }
+  else if (e.key === 'Enter') { if (results[switcherIdx]) results[switcherIdx].click(); e.preventDefault(); }
 }
 
 // ── Input ────────────────────────────────────────────────────────
@@ -756,11 +847,9 @@ function historyDown() {
 
 function tabComplete() {
   const el = document.getElementById('input');
-  const text = el.value;
-  const word = text.split(' ').pop().toLowerCase();
+  const text = el.value, word = text.split(' ').pop().toLowerCase();
   if (!word) return;
-  const b = buffers[activeBuffer];
-  if (!b) return;
+  const b = buffers[activeBuffer]; if (!b) return;
   for (const u of b.users) {
     const bare = u.replace(/^[@+]/, '');
     if (bare.toLowerCase().startsWith(word)) {
@@ -778,14 +867,10 @@ function handleCommand(text) {
   const target = activeBuffer !== 'server' ? buffers[activeBuffer]?.name || activeBuffer : '';
 
   switch (cmd) {
-    case 'join': case 'j':
-      args.split(',').map(s => s.trim()).filter(Boolean).forEach(ch => raw('JOIN ' + ch)); break;
-    case 'part': case 'leave':
-      raw('PART ' + (args || target)); break;
-    case 'nick':
-      if (args) raw('NICK ' + args.split(' ')[0]); break;
-    case 'topic': case 't':
-      raw(args ? 'TOPIC ' + target + ' :' + args : 'TOPIC ' + target); break;
+    case 'join': case 'j': args.split(',').map(s => s.trim()).filter(Boolean).forEach(ch => raw('JOIN ' + ch)); break;
+    case 'part': case 'leave': raw('PART ' + (args || target)); break;
+    case 'nick': if (args) raw('NICK ' + args.split(' ')[0]); break;
+    case 'topic': case 't': raw(args ? 'TOPIC ' + target + ' :' + args : 'TOPIC ' + target); break;
     case 'kick': case 'k': { const kp = args.split(' '); raw('KICK ' + target + ' ' + kp[0] + ' :' + (kp.slice(1).join(' ') || 'kicked')); break; }
     case 'mode': case 'm': raw('MODE ' + (args || target)); break;
     case 'ban': case 'b': raw(args ? 'MODE ' + target + ' +b ' + args : 'MODE ' + target + ' +b'); break;
@@ -796,7 +881,8 @@ function handleCommand(text) {
     case 'invite': if (args) raw('INVITE ' + args + ' ' + target); break;
     case 'msg': case 'query': {
       const mp = args.split(' '), t = mp[0], mt = mp.slice(1).join(' ');
-      if (t && mt) { raw('PRIVMSG ' + t + ' :' + mt); buf(t); addMsg(t, null, nick, mt, 'self'); }
+      if (t && mt) { raw('PRIVMSG ' + t + ' :' + mt); buf(t); addMsg(t, null, nick, mt, 'self'); switchBuffer(t.toLowerCase()); }
+      else if (t) { buf(t); switchBuffer(t.toLowerCase()); }
       break;
     }
     case 'me': case 'action':
@@ -805,21 +891,22 @@ function handleCommand(text) {
     case 'list': raw('LIST'); break;
     case 'names': raw('NAMES ' + (args || target)); break;
     case 'who': raw('WHO ' + (args || target)); break;
-    case 'history': {
-      const n = args || '50';
-      if (target) raw('CHATHISTORY LATEST ' + target + ' * ' + n);
-      break;
-    }
+    case 'history': { raw('CHATHISTORY LATEST ' + (args || target) + ' * ' + '50'); break; }
     case 'raw': case 'quote': raw(args); break;
     case 'clear': if (buffers[activeBuffer]) { buffers[activeBuffer].messages = []; renderMessages(); } break;
     case 'close': case 'wc':
-      if (activeBuffer !== 'server') {
-        if (target.startsWith('#') || target.startsWith('&')) raw('PART ' + target);
-        delete buffers[activeBuffer]; switchBuffer('server'); renderSidebar();
-      } break;
+      if (activeBuffer !== 'server') { if (target.startsWith('#') || target.startsWith('&')) raw('PART ' + target); delete buffers[activeBuffer]; switchBuffer('server'); renderSidebar(); } break;
     case 'quit': case 'q': doDisconnect(); break;
     case 'help': case 'h':
-      sysMsg('server', 'Commands: /join /part /nick /topic /kick /mode /ban /unban /op /deop /voice /invite /msg /me /whois /list /names /who /history /raw /clear /close /quit');
+      sysMsg(activeBuffer, '── Commands ──');
+      sysMsg(activeBuffer, '/join #channel · /part · /nick name · /msg user text');
+      sysMsg(activeBuffer, '/topic text · /kick user · /mode +o user · /ban mask');
+      sysMsg(activeBuffer, '/op user · /deop user · /voice user · /invite user');
+      sysMsg(activeBuffer, '/whois user · /list · /names · /who · /history');
+      sysMsg(activeBuffer, '/me action · /clear · /close · /quit');
+      sysMsg(activeBuffer, '── Shortcuts ──');
+      sysMsg(activeBuffer, 'Ctrl+K: quick switcher · Tab: nick completion');
+      sysMsg(activeBuffer, 'Up/Down: input history');
       break;
     default: raw(cmd.toUpperCase() + (args ? ' ' + args : ''));
   }
@@ -842,9 +929,17 @@ function renderSidebar() {
   order.forEach(key => {
     const b = buffers[key]; if (!b) return;
     const item = document.createElement('div');
-    item.className = 'item' + (key === activeBuffer ? ' active' : '');
+    item.className = 'item' + (key === activeBuffer ? ' active' : '') + (b.mentions > 0 ? ' has-mention' : '');
     item.textContent = key === 'server' ? '(status)' : b.name;
-    if (b.unread > 0) { const badge = document.createElement('span'); badge.className = 'badge'; badge.textContent = b.unread; item.appendChild(badge); }
+    if (b.mentions > 0) {
+      const badge = document.createElement('span');
+      badge.className = 'badge mention'; badge.textContent = b.mentions;
+      item.appendChild(badge);
+    } else if (b.unread > 0) {
+      const badge = document.createElement('span');
+      badge.className = 'badge unread'; badge.textContent = b.unread;
+      item.appendChild(badge);
+    }
     item.onclick = () => switchBuffer(key);
     el.appendChild(item);
   });
@@ -874,26 +969,50 @@ function renderNicklist() {
 function switchBuffer(name) {
   activeBuffer = name.toLowerCase();
   const b = buffers[activeBuffer];
-  if (b) b.unread = 0;
+  if (b) { b.unread = 0; b.mentions = 0; }
   document.getElementById('hdr-topic').textContent = (b && b.topic) || '';
   renderMessages(); renderSidebar(); renderNicklist();
   document.getElementById('input').focus();
+  // Update title
+  document.title = (b && b.name && b.name !== 'server') ? b.name + ' — freeq' : 'freeq';
 }
 
 function setStatus(cls, text) { const el = document.getElementById('status-pill'); el.className = 'pill ' + cls; el.textContent = text; }
 
 function toggleNicklist() { document.getElementById('nicklist').classList.toggle('hidden'); }
+function toggleSidebar() { document.getElementById('sidebar').classList.toggle('open'); }
+
+// ── Global keyboard shortcuts ────────────────────────────────────
+
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); showSwitcher(); }
+  if (e.key === 'Escape') { closeSwitcher(); closeLightbox(); }
+  // Alt+Up/Down to switch buffers
+  if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+    e.preventDefault();
+    const keys = ['server', ...Object.keys(buffers).filter(k => k !== 'server').sort()];
+    const idx = keys.indexOf(activeBuffer);
+    if (e.key === 'ArrowUp' && idx > 0) switchBuffer(keys[idx - 1]);
+    if (e.key === 'ArrowDown' && idx < keys.length - 1) switchBuffer(keys[idx + 1]);
+  }
+});
 
 // ── Init ─────────────────────────────────────────────────────────
 
-// Auto-detect server URL from current page
 (function() {
   const loc = window.location;
   const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
-  document.getElementById('f-server').value = proto + '//' + loc.host + '/irc';
+  const serverInput = document.getElementById('f-server');
+
+  // If on app.freeq.at, point to irc.freeq.at
+  if (loc.hostname === 'app.freeq.at') {
+    serverInput.value = 'wss://irc.freeq.at/irc';
+  } else {
+    serverInput.value = proto + '//' + loc.host + '/irc';
+  }
+
   document.getElementById('f-nick').value = 'web' + Math.floor(Math.random() * 99999);
 
-  // Show OAuth button when handle is entered
   const handleInput = document.getElementById('f-at-handle');
   handleInput.addEventListener('input', () => {
     document.getElementById('btn-oauth').style.display = handleInput.value.trim().length > 0 ? '' : 'none';
